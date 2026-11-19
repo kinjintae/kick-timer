@@ -212,7 +212,7 @@ function smoothWorld(world){
 }
 
 // 몸통 기준 좌표계: 가로=어깨선, 세로=엉덩이→어깨, 앞뒤=둘의 수직
-function features(P){
+function features(P, lm){
   const midSh=[(P[11][0]+P[12][0])/2,(P[11][1]+P[12][1])/2,(P[11][2]+P[12][2])/2];
   const midHip=[(P[23][0]+P[24][0])/2,(P[23][1]+P[24][1])/2,(P[23][2]+P[24][2])/2];
   const up = norm(sub(midSh, midHip));
@@ -221,19 +221,23 @@ function features(P){
   const Z = cross(X, up);
   const vecs = SEGS.map(s=>{ const v=norm(sub(P[s.b],P[s.a])); return [dot(v,X),dot(v,up),dot(v,Z)]; });
   const yaw = Math.atan2(P[12][2]-P[11][2], P[12][0]-P[11][0])*180/Math.PI;
-  return { vecs, yaw };
+  const vis = SEGS.map(sg=> lm ? Math.min(lm[sg.a].visibility ?? 1, lm[sg.b].visibility ?? 1) : 1);
+  return { vecs, yaw, vis };
 }
 function yawDiff(a,b){ let d=Math.abs(a-b)%360; return d>180?360-d:d; }
 function avgFeatures(list){
   const vecs = SEGS.map((_,i)=>norm(list.reduce((s,f)=>[s[0]+f.vecs[i][0],s[1]+f.vecs[i][1],s[2]+f.vecs[i][2]],[0,0,0])));
   let sx=0, sy=0; list.forEach(f=>{ sx+=Math.cos(f.yaw*Math.PI/180); sy+=Math.sin(f.yaw*Math.PI/180); });
-  return { vecs, yaw: Math.atan2(sy,sx)*180/Math.PI };
+  const vis = SEGS.map((_,i)=> list.reduce((s,f)=>s+(f.vis?f.vis[i]:1),0)/list.length);
+  return { vecs, yaw: Math.atan2(sy,sx)*180/Math.PI, vis };
 }
+const VIS_MIN = 0.65;   // 이보다 낮으면 '가려진 부위'로 보고 판정에서 뺌
 function compare(f, ref){
-  const diffs = f.vecs.map((v,i)=>angBetween(v, ref.vecs[i]));
-  let worst=0; diffs.forEach((d,i)=>{ if(d>diffs[worst]) worst=i; });
-  const mean = diffs.reduce((s,d)=>s+d,0)/diffs.length;
-  return { diffs, worst, worstDiff:diffs[worst], mean, yd:yawDiff(f.yaw, ref.yaw) };
+  const used = SEGS.map((_,i)=> (!f.vis || f.vis[i]>=VIS_MIN) && (!ref.vis || ref.vis[i]>=VIS_MIN));
+  const diffs = f.vecs.map((v,i)=> used[i] ? angBetween(v, ref.vecs[i]) : null);
+  let worst=-1, sum=0, n=0;
+  diffs.forEach((d,i)=>{ if(d===null) return; sum+=d; n++; if(worst<0 || d>diffs[worst]) worst=i; });
+  return { diffs, used, n, worst, worstDiff: worst<0?999:diffs[worst], mean: n?sum/n:999, yd:yawDiff(f.yaw, ref.yaw) };
 }
 
 // ---------- 화면 ----------
@@ -342,9 +346,9 @@ function handle(res, now){
   const lm = res.landmarks && res.landmarks[0];
   const world = res.worldLandmarks && res.worldLandmarks[0];
   if(!lm || !world){ smooth=null; holdStart=null; setBar(0,'#e33'); $('feedback').textContent='사람이 안 보입니다'; return; }
-  const visible = KEY_POINTS.every(i => (lm[i].visibility ?? 1) > 0.5);
+  const visible = [11,12,23,24,25,26,27,28].every(i => (lm[i].visibility ?? 1) > 0.5);
   if(!visible){ holdStart=null; setBar(0,'#e33'); $('feedback').textContent='머리부터 발끝까지 화면에 들어오게 뒤로 가 주세요'; return; }
-  const f = features(smoothWorld(world));
+  const f = features(smoothWorld(world), lm);
 
   // ----- 정답 녹화 -----
   if(capturing){
@@ -356,7 +360,7 @@ function handle(res, now){
         const ref = avgFeatures(capturing.samples);
         // 흔들림 검사: 측정 중 각 부위가 평균에서 얼마나 벗어났나
         let shake=0;
-        capturing.samples.forEach(s=>{ const c=compare(s,ref); if(c.worstDiff>shake) shake=c.worstDiff; });
+        capturing.samples.forEach(s=>{ const c=compare(s,ref); if(c.n>0 && c.worstDiff>shake) shake=c.worstDiff; });
         capturing=null; $('countdown').textContent='';
         if(shake>18){
           $('feedback').textContent='❌ 흔들림이 커서 저장하지 않았습니다 ('+Math.round(shake)+'°). 멈춘 자세로 다시 해주세요';
@@ -389,11 +393,11 @@ function handle(res, now){
   });
   const isClosest = !other || c.mean <= otherScore;
 
-  const okLimbs = c.worstDiff <= tol;
+  const okLimbs = c.n >= 4 && c.worstDiff <= tol;
   const okYaw = !useYaw || c.yd <= 40;
   const closeness = Math.max(0, 1 - c.worstDiff/(tol*2));
   if($('debug').checked){
-    const L=SEGS.map((sg,i)=>{ const d=Math.round(c.diffs[i]); return (d>tol?'✗ ':'✓ ')+sg.name.replace('(주먹 방향)','')+' '+d+'°'; });
+    const L=SEGS.map((sg,i)=>{ const nm=sg.name.replace('(주먹 방향)',''); if(c.diffs[i]===null) return '– '+nm+' 가려짐(판정 제외)'; const d=Math.round(c.diffs[i]); return (d>tol?'✗ ':'✓ ')+nm+' '+d+'°'; });
     L.push((okYaw?'✓ ':'✗ ')+'몸 방향 '+Math.round(c.yd)+'°'+(useYaw?'':' (판정 안 함)'));
     L.push((isClosest?'✓ ':'✗ ')+'지금 동작 평균 '+Math.round(c.mean)+'°'+(other?' / 가장 비슷한 다른 동작 "'+other.name+'" '+Math.round(otherScore)+'°':''));
     $('judgePanel').textContent=L.join('\n'); $('judgePanel').style.display='block';
@@ -413,7 +417,8 @@ function handle(res, now){
     holdStart=null;
     setBar(closeness, closeness>0.6?'#fa3':'#e33');
     let hint;
-    if(!okLimbs) hint=SEGS[c.worst].name+' 확인 ('+Math.round(c.worstDiff)+'° 차이)';
+    if(c.n<4) hint='팔다리가 너무 많이 가려졌어요. 카메라 위치를 바꿔보세요';
+    else if(!okLimbs) hint=SEGS[c.worst].name+' 확인 ('+Math.round(c.worstDiff)+'° 차이)';
     else if(!okYaw) hint='몸 방향을 확인하세요';
     else hint='"'+other.name+'" 동작과 더 비슷해요';
     $('feedback').textContent=hint;
