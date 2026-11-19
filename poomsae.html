@@ -34,7 +34,29 @@
   input[type=range] { width:100%; }
   .row { display:flex; gap:6px; flex-wrap:wrap; }
   small { color:#999; }
-  @media (max-width:900px){ main{flex-direction:column;} aside{width:auto;} }
+  #floatBar { position:absolute; left:0; right:0; bottom:48px; display:flex; justify-content:center; gap:8px; padding:0 8px; }
+  #floatBar button { background:#000a; border-color:#666; padding:10px 14px; font-size:16px; }
+  #floatBar #fCapture { background:#e33; border-color:#e33; font-weight:700; display:none; }
+  #sheetBtn, #sheetClose { display:none; }
+  @media (max-width:900px){
+    header { padding:6px 8px; gap:6px; }
+    header h1 { display:none; }
+    header button { padding:6px 10px; font-size:14px; }
+    header span { display:none; }
+    body { display:flex; flex-direction:column; height:100dvh; overflow:hidden; }
+    main { padding:0; display:block; flex:1; min-height:0; }
+    #stage { border-radius:0; height:100%; min-height:0; }
+    #stage canvas { width:100%; height:100%; max-height:none; }
+    #stepName { font-size:24px; }
+    #feedback { font-size:16px; }
+    #judgePanel { font-size:11px !important; line-height:1.35 !important; bottom:100px !important; }
+    #barWrap { bottom:14px; height:18px; }
+    #sheetBtn, #sheetClose { display:inline-block; }
+    aside { position:fixed; left:0; right:0; bottom:0; max-height:75dvh; overflow:auto; width:auto;
+            background:#111; border-radius:16px 16px 0 0; padding:10px; box-shadow:0 -4px 20px #000;
+            transform:translateY(105%); transition:transform .25s; z-index:10; }
+    aside.open { transform:none; }
+  }
 </style>
 </head>
 <body>
@@ -53,9 +75,17 @@
     <div id="overlay"><div id="stepName">카메라를 켜주세요</div><div id="feedback"></div></div>
     <div id="countdown"></div>
     <div id="judgePanel" style="position:absolute;left:8px;bottom:46px;background:#000b;color:#fff;font:13px/1.45 monospace;padding:8px 10px;border-radius:8px;white-space:pre;pointer-events:none;display:none"></div>
+    <div id="floatBar">
+      <button id="fPrev">◀</button>
+      <button id="fReset">처음</button>
+      <button id="fCapture">● 자세 저장</button>
+      <button id="fNext">▶</button>
+      <button id="sheetBtn">⚙ 메뉴</button>
+    </div>
     <div id="barWrap"><div id="bar"></div></div>
   </div>
-  <aside>
+  <aside id="sheet">
+    <button id="sheetClose" style="width:100%">닫기 ▼</button>
     <div class="card">
       <h3>동작 순서</h3>
       <ol id="steps"></ol>
@@ -235,6 +265,7 @@ function setMode(m){
   $('modePractice').classList.toggle('on', m==='practice');
   $('modeRecord').classList.toggle('on', m==='record');
   $('recordCard').style.display = m==='record' ? '' : 'none';
+  $('fCapture').style.display = m==='record' ? 'inline-block' : 'none';
   holdStart=null; updateTitle(m==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '');
 }
 
@@ -412,6 +443,12 @@ $('flipCam').onclick=async()=>{
   if(running){ try{ await openCamera(); }catch(e){ $('feedback').textContent='카메라 전환 실패: '+(e.message||e); } }
 };
 $('modePractice').onclick=()=>setMode('practice');
+$('fPrev').onclick=()=>$('prevBtn').click();
+$('fNext').onclick=()=>$('nextBtn').click();
+$('fReset').onclick=()=>$('resetBtn').click();
+$('fCapture').onclick=capture;
+$('sheetBtn').onclick=()=>$('sheet').classList.add('open');
+$('sheetClose').onclick=()=>$('sheet').classList.remove('open');
 $('modeRecord').onclick=()=>setMode('record');
 $('prevBtn').onclick=()=>{ if(cur>0){cur--; holdStart=null; renderSteps(); updateTitle('');} };
 $('nextBtn').onclick=()=>{ if(cur<data.steps.length-1){cur++; holdStart=null; renderSteps(); updateTitle('');} };
