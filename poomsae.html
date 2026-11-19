@@ -231,7 +231,7 @@ function avgFeatures(list){
   const vis = SEGS.map((_,i)=> list.reduce((s,f)=>s+(f.vis?f.vis[i]:1),0)/list.length);
   return { vecs, yaw: Math.atan2(sy,sx)*180/Math.PI, vis };
 }
-const VIS_MIN = 0.65;   // 이보다 낮으면 '가려진 부위'로 보고 판정에서 뺌
+const VIS_MIN = 0.3;    // 이보다 낮으면 '가려진 부위'로 보고 판정에서 뺌
 function compare(f, ref){
   const used = SEGS.map((_,i)=> (!f.vis || f.vis[i]>=VIS_MIN) && (!ref.vis || ref.vis[i]>=VIS_MIN));
   const diffs = f.vecs.map((v,i)=> used[i] ? angBetween(v, ref.vecs[i]) : null);
@@ -345,8 +345,10 @@ function loop(){
 function handle(res, now){
   const lm = res.landmarks && res.landmarks[0];
   const world = res.worldLandmarks && res.worldLandmarks[0];
-  if(!lm || !world){ smooth=null; holdStart=null; setBar(0,'#e33'); $('feedback').textContent='사람이 안 보입니다'; return; }
-  const visible = [11,12,23,24,25,26,27,28].every(i => (lm[i].visibility ?? 1) > 0.5);
+  if(!lm || !world){ $('judgePanel').style.display='none'; smooth=null; holdStart=null; setBar(0,'#e33'); $('feedback').textContent='사람이 안 보입니다'; return; }
+  // 화면 안에 있는지는 좌표로 확인 (AI의 '보임 점수'는 어두운 바지·바닥에서 낮게 나와 믿기 어려움)
+  const inFrame = [11,12,23,24,27,28].every(i => lm[i].x>-0.02 && lm[i].x<1.02 && lm[i].y>-0.02 && lm[i].y<1.03);
+  const visible = inFrame && [11,12,23,24].every(i => (lm[i].visibility ?? 1) > 0.3);
   if(!visible){ holdStart=null; setBar(0,'#e33'); $('feedback').textContent='머리부터 발끝까지 화면에 들어오게 뒤로 가 주세요'; return; }
   const f = features(smoothWorld(world), lm);
 
@@ -384,7 +386,13 @@ function handle(res, now){
     }
     return;
   }
-  if(mode!=='practice') return;
+  if(mode!=='practice'){
+    if($('debug').checked){
+      $('judgePanel').textContent = '[녹화 모드] 부위별 보임 점수 (0~1)\n' + SEGS.map((sg,i)=>{ const v=f.vis[i]; return (v>=VIS_MIN?'✓ ':'– ')+sg.name.replace('(주먹 방향)','')+' '+v.toFixed(2); }).join('\n');
+      $('judgePanel').style.display='block';
+    } else $('judgePanel').style.display='none';
+    return;
+  }
 
   const step=data.steps[cur];
   if(!step) return;
@@ -406,7 +414,7 @@ function handle(res, now){
   const okYaw = !useYaw || c.yd <= 40;
   const closeness = Math.max(0, 1 - c.worstDiff/(tol*2));
   if($('debug').checked){
-    const L=SEGS.map((sg,i)=>{ const nm=sg.name.replace('(주먹 방향)',''); if(c.diffs[i]===null) return '– '+nm+' 가려짐(판정 제외)'; const d=Math.round(c.diffs[i]); return (d>tol?'✗ ':'✓ ')+nm+' '+d+'°'; });
+    const L=SEGS.map((sg,i)=>{ const nm=sg.name.replace('(주먹 방향)',''); const v=' (보임 '+f.vis[i].toFixed(2)+')'; if(c.diffs[i]===null) return '– '+nm+' 제외'+v; const d=Math.round(c.diffs[i]); return (d>tol?'✗ ':'✓ ')+nm+' '+d+'°'+v; });
     L.push((okYaw?'✓ ':'✗ ')+'몸 방향 '+Math.round(c.yd)+'°'+(useYaw?'':' (판정 안 함)'));
     L.push((isClosest?'✓ ':'✗ ')+'지금 동작 평균 '+Math.round(c.mean)+'°'+(other?' / 가장 비슷한 다른 동작 "'+other.name+'" '+Math.round(otherScore)+'°':''));
     $('judgePanel').textContent=L.join('\n'); $('judgePanel').style.display='block';
