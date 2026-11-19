@@ -66,7 +66,7 @@
     </div>
     <div class="card" id="recordCard" style="display:none">
       <h3>정답 녹화</h3>
-      <small>순서에서 동작을 고르고 [자세 저장]을 누르세요. 3초 뒤 1초 동안 자세를 측정합니다. 관장님이 정확한 자세로 서 주세요.</small>
+      <small>순서에서 동작을 고르고 [자세 저장]을 누르세요. 3초 뒤 1.5초 동안 자세를 측정합니다. 흔들리면 저장을 거부하니 멈춘 자세로 서 주세요. 관장님이 정확한 자세로 서 주세요.</small>
       <div class="row" style="margin-top:8px">
         <button id="captureBtn">자세 저장 (3초 후)</button>
         <button id="clearBtn">이 동작 지우기</button>
@@ -79,12 +79,18 @@
     </div>
     <div class="card">
       <h3>판정 설정</h3>
-      <label>허용 오차: <b id="tolV"></b>°  <small>(작을수록 엄격)</small>
-        <input type="range" id="tol" min="8" max="40" value="20"></label>
+      <label>허용 오차: <b id="tolV"></b>°  <small>(팔·다리 중 가장 틀린 부위 기준, 작을수록 엄격)</small>
+        <input type="range" id="tol" min="10" max="50" value="28"></label>
       <label>유지 시간: <b id="holdV"></b>초
-        <input type="range" id="hold" min="0.3" max="2" step="0.1" value="0.7"></label>
+        <input type="range" id="hold" min="0.3" max="2" step="0.1" value="1.0"></label>
       <label><input type="checkbox" id="useYaw" checked> 몸 방향(돌기)도 판정 <small>— 정면 카메라라 부정확할 수 있음</small></label>
       <label><input type="checkbox" id="mirror" checked> 거울처럼 좌우 반전 표시</label>
+      <label>AI 모델 <small>(바꾸면 카메라 다시 켜기)</small>
+        <select id="model" style="width:100%;padding:6px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444">
+          <option value="full">정밀 (권장)</option>
+          <option value="lite">가벼움 (느린 폰용, 떨림 큼)</option>
+          <option value="heavy">최고 정밀 (최신 폰/PC)</option>
+        </select></label>
     </div>
     <div class="card">
       <h3>데이터</h3>
@@ -98,26 +104,29 @@
   </aside>
 </main>
 
+
 <script type="module">
 import { PoseLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
-// ---------- 관절 각도 정의 (MediaPipe 랜드마크 번호) ----------
-// 11/12 어깨, 13/14 팔꿈치, 15/16 손목, 23/24 엉덩이, 25/26 무릎, 27/28 발목
-const JOINTS = [
-  { name:'왼팔꿈치',   pts:[11,13,15] },
-  { name:'오른팔꿈치', pts:[12,14,16] },
-  { name:'왼팔(몸통 기준)',   pts:[23,11,13] },
-  { name:'오른팔(몸통 기준)', pts:[24,12,14] },
-  { name:'왼팔(어깨선 기준)',   pts:[12,11,13] },
-  { name:'오른팔(어깨선 기준)', pts:[11,12,14] },
-  { name:'왼쪽 엉덩이', pts:[11,23,25] },
-  { name:'오른쪽 엉덩이', pts:[12,24,26] },
-  { name:'왼다리 벌림', pts:[24,23,25] },
-  { name:'오른다리 벌림', pts:[23,24,26] },
-  { name:'왼무릎', pts:[23,25,27] },
-  { name:'오른무릎', pts:[24,26,28] },
+// ---------- 판정 부위: 팔·다리 마디의 "방향" ----------
+// MediaPipe 번호: 11/12 어깨, 13/14 팔꿈치, 15/16 손목, 23/24 엉덩이, 25/26 무릎, 27/28 발목
+// 각 마디가 몸통 기준으로 어느 쪽을 향하는지 비교 → 아래막기(팔이 아래)와 지르기(팔이 앞)를 구분
+const SEGS = [
+  { name:'왼쪽 위팔',   a:11, b:13 },
+  { name:'왼쪽 아래팔(주먹 방향)', a:13, b:15 },
+  { name:'오른쪽 위팔', a:12, b:14 },
+  { name:'오른쪽 아래팔(주먹 방향)', a:14, b:16 },
+  { name:'왼쪽 허벅지', a:23, b:25 },
+  { name:'왼쪽 정강이', a:25, b:27 },
+  { name:'오른쪽 허벅지', a:24, b:26 },
+  { name:'오른쪽 정강이', a:26, b:28 },
 ];
 const KEY_POINTS = [11,12,13,14,15,16,23,24,25,26,27,28];
+const MODEL_URL = {
+  lite:  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  full:  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  heavy: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+};
 
 const DEFAULT_STEPS = [
   '준비',
@@ -127,11 +136,19 @@ const DEFAULT_STEPS = [
   '4. 왼 앞서기 몸통반대지르기',
 ];
 
-// ---------- 저장 ----------
-const STORE_KEY = 'poomsae_proto_v1';
+// ---------- 저장 (v2: 판정 방식이 바뀌어 예전 정답은 다시 녹화 필요) ----------
+const STORE_KEY = 'poomsae_proto_v2';
 let data = { title:'태극 1장', steps: DEFAULT_STEPS.map(n => ({ name:n, ref:null })) };
-try { const s = localStorage.getItem(STORE_KEY); if (s) data = JSON.parse(s); } catch(e) {}
+try {
+  const s = localStorage.getItem(STORE_KEY);
+  if (s) data = JSON.parse(s);
+  else {
+    const old = localStorage.getItem('poomsae_proto_v1');
+    if (old) { const o = JSON.parse(old); data = { title:o.title||'태극 1장', steps:o.steps.map(x=>({name:x.name, ref:null})) }; }
+  }
+} catch(e) {}
 function save(){ try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch(e) {} }
+function validRef(r){ return r && Array.isArray(r.vecs) && r.vecs.length===SEGS.length; }
 
 // ---------- 상태 ----------
 let mode = 'practice';
@@ -139,43 +156,52 @@ let cur = 0;
 let passed = new Set();
 let holdStart = null;
 let landmarker = null, video = null, running = false, drawer = null;
-let lastFeat = null;
-let capturing = null;   // { until, samples:[] }
+let capturing = null;
 let lastTs = -1;
 let facing = 'user';
-const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+let smooth = null;          // 떨림 줄이기용 평균 좌표
+const SMOOTH = 0.35;        // 0~1, 작을수록 부드럽고 느림
 
 const $ = id => document.getElementById(id);
 const cv = $('cv'), ctx = cv.getContext('2d');
 
-// ---------- 수학 ----------
-function angle3(a,b,c){
-  const v1=[a.x-b.x,a.y-b.y,a.z-b.z], v2=[c.x-b.x,c.y-b.y,c.z-b.z];
-  const d=v1[0]*v2[0]+v1[1]*v2[1]+v1[2]*v2[2];
-  const n=Math.hypot(...v1)*Math.hypot(...v2);
-  if(!n) return 0;
-  return Math.acos(Math.max(-1,Math.min(1,d/n)))*180/Math.PI;
+// ---------- 벡터 계산 ----------
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const norm=a=>{ const n=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/n,a[1]/n,a[2]/n]; };
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const angBetween=(a,b)=>Math.acos(Math.max(-1,Math.min(1,dot(a,b))))*180/Math.PI;
+
+function smoothWorld(world){
+  const p = world.map(l=>[l.x,l.y,l.z]);
+  if(!smooth) smooth = p;
+  else smooth = smooth.map((s,i)=>[s[0]+(p[i][0]-s[0])*SMOOTH, s[1]+(p[i][1]-s[1])*SMOOTH, s[2]+(p[i][2]-s[2])*SMOOTH]);
+  return smooth;
 }
-function features(world){
-  const angles = JOINTS.map(j => angle3(world[j.pts[0]], world[j.pts[1]], world[j.pts[2]]));
-  const L=world[11], R=world[12];
-  const yaw = Math.atan2(R.z-L.z, R.x-L.x)*180/Math.PI;  // 어깨선이 카메라 기준 얼마나 돌았나
-  return { angles, yaw };
+
+// 몸통 기준 좌표계: 가로=어깨선, 세로=엉덩이→어깨, 앞뒤=둘의 수직
+function features(P){
+  const midSh=[(P[11][0]+P[12][0])/2,(P[11][1]+P[12][1])/2,(P[11][2]+P[12][2])/2];
+  const midHip=[(P[23][0]+P[24][0])/2,(P[23][1]+P[24][1])/2,(P[23][2]+P[24][2])/2];
+  const up = norm(sub(midSh, midHip));
+  let X = sub(P[11], P[12]);
+  const k = dot(X,up); X = norm([X[0]-k*up[0], X[1]-k*up[1], X[2]-k*up[2]]);
+  const Z = cross(X, up);
+  const vecs = SEGS.map(s=>{ const v=norm(sub(P[s.b],P[s.a])); return [dot(v,X),dot(v,up),dot(v,Z)]; });
+  const yaw = Math.atan2(P[12][2]-P[11][2], P[12][0]-P[11][0])*180/Math.PI;
+  return { vecs, yaw };
 }
 function yawDiff(a,b){ let d=Math.abs(a-b)%360; return d>180?360-d:d; }
 function avgFeatures(list){
-  const n=list.length;
-  const angles = JOINTS.map((_,i)=> list.reduce((s,f)=>s+f.angles[i],0)/n);
-  // 각도 평균은 단위벡터로
+  const vecs = SEGS.map((_,i)=>norm(list.reduce((s,f)=>[s[0]+f.vecs[i][0],s[1]+f.vecs[i][1],s[2]+f.vecs[i][2]],[0,0,0])));
   let sx=0, sy=0; list.forEach(f=>{ sx+=Math.cos(f.yaw*Math.PI/180); sy+=Math.sin(f.yaw*Math.PI/180); });
-  return { angles, yaw: Math.atan2(sy,sx)*180/Math.PI };
+  return { vecs, yaw: Math.atan2(sy,sx)*180/Math.PI };
 }
 function compare(f, ref){
-  const diffs = f.angles.map((a,i)=>Math.abs(a-ref.angles[i]));
+  const diffs = f.vecs.map((v,i)=>angBetween(v, ref.vecs[i]));
+  let worst=0; diffs.forEach((d,i)=>{ if(d>diffs[worst]) worst=i; });
   const mean = diffs.reduce((s,d)=>s+d,0)/diffs.length;
-  let worst = 0; diffs.forEach((d,i)=>{ if(d>diffs[worst]) worst=i; });
-  const yd = yawDiff(f.yaw, ref.yaw);
-  return { mean, worst, worstDiff: diffs[worst], yd };
+  return { diffs, worst, worstDiff:diffs[worst], mean, yd:yawDiff(f.yaw, ref.yaw) };
 }
 
 // ---------- 화면 ----------
@@ -185,12 +211,12 @@ function renderSteps(){
     const li=document.createElement('li');
     li.textContent=s.name;
     const t=document.createElement('span');
-    t.className='tag'+(s.ref?' ok':'');
-    t.textContent = s.ref ? '정답 있음' : '정답 없음';
+    t.className='tag'+(validRef(s.ref)?' ok':'');
+    t.textContent = validRef(s.ref) ? '정답 있음' : '정답 없음';
     li.appendChild(t);
     if(i===cur) li.classList.add('cur');
     if(passed.has(i)) li.classList.add('done');
-    li.onclick=()=>{ cur=i; holdStart=null; renderSteps(); updateTitle(); };
+    li.onclick=()=>{ cur=i; holdStart=null; renderSteps(); updateTitle(''); };
     ol.appendChild(li);
   });
   const c = ol.children[cur]; if(c) c.scrollIntoView({block:'nearest'});
@@ -211,36 +237,46 @@ function setMode(m){
 }
 
 // ---------- 카메라 / 모델 ----------
+async function openCamera(){
+  if(video && video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); }
+  if(!video){ video=document.createElement('video'); video.playsInline=true; video.muted=true; video.setAttribute('playsinline',''); }
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:facing, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+  await video.play();
+  cv.width=video.videoWidth; cv.height=video.videoHeight;
+  smooth=null;
+}
+async function loadModel(){
+  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  const url = MODEL_URL[$('model').value] || MODEL_URL.full;
+  const opts = d=>({ baseOptions:{ modelAssetPath:url, delegate:d }, runningMode:'VIDEO', numPoses:1,
+                     minPoseDetectionConfidence:0.6, minPosePresenceConfidence:0.6, minTrackingConfidence:0.6 });
+  if(landmarker){ try{ landmarker.close(); }catch(e){} }
+  try { landmarker = await PoseLandmarker.createFromOptions(vision, opts('GPU')); }
+  catch(e){ landmarker = await PoseLandmarker.createFromOptions(vision, opts('CPU')); }
+}
+
 async function start(){
   $('startCam').disabled=true;
-  updateTitle('AI 모델 불러오는 중… (처음엔 10초 정도 걸립니다)');
+  updateTitle('카메라 켜는 중…');
   let stage='카메라';
   try{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error('이 화면에서는 카메라를 쓸 수 없습니다'),{name:'NoMediaDevices'});
-    // 카메라 먼저 확인
     await openCamera();
     stage='AI 모델';
-    const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-    const opts = (delegate)=>({
-      baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/"+(IS_MOBILE?"pose_landmarker_lite/float16/1/pose_landmarker_lite.task":"pose_landmarker_full/float16/1/pose_landmarker_full.task"), delegate },
-      runningMode:'VIDEO', numPoses:1
-    });
-    try { landmarker = await PoseLandmarker.createFromOptions(vision, opts('GPU')); }
-    catch(e){ landmarker = await PoseLandmarker.createFromOptions(vision, opts('CPU')); }
-
-    cv.width=video.videoWidth; cv.height=video.videoHeight;
+    updateTitle('AI 모델 불러오는 중… (처음엔 10~20초 걸립니다)');
+    await loadModel();
     drawer = new DrawingUtils(ctx);
-    running=true;
+    if(!running){ running=true; requestAnimationFrame(loop); }
     updateTitle(mode==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '');
-    requestAnimationFrame(loop);
+    $('startCam').disabled=false; $('startCam').textContent='다시 시작';
   }catch(e){
     console.error(e);
     const n=e && e.name;
     let why;
-    if(n==='NoMediaDevices') why='앱 미리보기 화면에서는 카메라가 막힙니다. 파일을 내려받아 크롬으로 직접 여세요.';
-    else if(n==='NotAllowedError'||n==='SecurityError') why='카메라 권한이 거부됐습니다. 주소창 왼쪽 자물쇠/아이콘 → 카메라 [허용] 후 새로고침.';
-    else if(n==='NotFoundError'||n==='OverconstrainedError') why='연결된 웹캠을 찾지 못했습니다. 웹캠 연결을 확인하세요.';
-    else if(n==='NotReadableError'||n==='AbortError') why='다른 프로그램(줌, 카톡, OBS 등)이 카메라를 쓰고 있습니다. 끄고 다시 시도하세요.';
+    if(n==='NoMediaDevices') why='앱 미리보기 화면에서는 카메라가 막힙니다. 인터넷 주소(https)로 여세요.';
+    else if(n==='NotAllowedError'||n==='SecurityError') why='카메라 권한이 거부됐습니다. 주소창 왼쪽 아이콘 → 카메라 [허용] 후 새로고침.';
+    else if(n==='NotFoundError'||n==='OverconstrainedError') why='카메라를 찾지 못했습니다.';
+    else if(n==='NotReadableError'||n==='AbortError') why='다른 앱이 카메라를 쓰고 있습니다. 끄고 다시 시도하세요.';
     else if(stage==='AI 모델') why='AI 모델을 받지 못했습니다. 인터넷 연결을 확인하세요.';
     else why='알 수 없는 오류';
     updateTitle(stage+' 단계 실패');
@@ -249,30 +285,22 @@ async function start(){
   }
 }
 
-async function openCamera(){
-  if(video && video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); }
-  if(!video){ video=document.createElement('video'); video.playsInline=true; video.muted=true; video.setAttribute('playsinline',''); }
-  video.srcObject = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:facing, width:{ideal:1280}, height:{ideal:720} }, audio:false });
-  await video.play();
-  cv.width=video.videoWidth; cv.height=video.videoHeight;
-}
-
 function loop(){
-  if(!running) return;
   const now=performance.now();
-  if(video.readyState>=2 && now!==lastTs){
+  if(landmarker && video && video.readyState>=2 && now>lastTs){
     lastTs=now;
-    const res = landmarker.detectForVideo(video, now);
+    let res=null;
+    try{ res = landmarker.detectForVideo(video, now); }catch(e){}
     const mirror=$('mirror').checked;
     ctx.save();
     if(mirror){ ctx.translate(cv.width,0); ctx.scale(-1,1); }
     ctx.drawImage(video,0,0,cv.width,cv.height);
-    if(res.landmarks && res.landmarks[0]){
+    if(res && res.landmarks && res.landmarks[0]){
       drawer.drawConnectors(res.landmarks[0], PoseLandmarker.POSE_CONNECTIONS, { color:'#ffd400', lineWidth:4 });
       drawer.drawLandmarks(res.landmarks[0], { color:'#fff', radius:3 });
     }
     ctx.restore();
-    handle(res, now);
+    if(res) handle(res, now);
   }
   requestAnimationFrame(loop);
 }
@@ -280,22 +308,32 @@ function loop(){
 function handle(res, now){
   const lm = res.landmarks && res.landmarks[0];
   const world = res.worldLandmarks && res.worldLandmarks[0];
-  if(!lm || !world){ lastFeat=null; holdStart=null; setBar(0,'#e33'); if(!capturing) updateTitle(undefined), $('feedback').textContent='사람이 안 보입니다'; return; }
+  if(!lm || !world){ smooth=null; holdStart=null; setBar(0,'#e33'); $('feedback').textContent='사람이 안 보입니다'; return; }
   const visible = KEY_POINTS.every(i => (lm[i].visibility ?? 1) > 0.5);
-  if(!visible){ holdStart=null; setBar(0,'#e33'); if(!capturing) $('feedback').textContent='머리부터 발끝까지 화면에 들어오게 뒤로 가 주세요'; return; }
-  const f = features(world); lastFeat=f;
+  if(!visible){ holdStart=null; setBar(0,'#e33'); $('feedback').textContent='머리부터 발끝까지 화면에 들어오게 뒤로 가 주세요'; return; }
+  const f = features(smoothWorld(world));
 
-  // 녹화 중
+  // ----- 정답 녹화 -----
   if(capturing){
     if(now>=capturing.startAt){
       capturing.samples.push(f);
-      $('feedback').textContent='측정 중… 자세 유지!';
-      if(now>=capturing.startAt+1000){
+      $('feedback').textContent='측정 중… 움직이지 마세요!';
+      if(now>=capturing.startAt+1500){
         const step=data.steps[cur];
-        step.ref = avgFeatures(capturing.samples);
-        capturing=null; save(); renderSteps();
-        $('countdown').textContent='';
-        $('feedback').textContent='✅ 저장 완료 ('+step.name+')';
+        const ref = avgFeatures(capturing.samples);
+        // 흔들림 검사: 측정 중 각 부위가 평균에서 얼마나 벗어났나
+        let shake=0;
+        capturing.samples.forEach(s=>{ const c=compare(s,ref); if(c.worstDiff>shake) shake=c.worstDiff; });
+        capturing=null; $('countdown').textContent='';
+        if(shake>18){
+          $('feedback').textContent='❌ 흔들림이 커서 저장하지 않았습니다 ('+Math.round(shake)+'°). 멈춘 자세로 다시 해주세요';
+        }else{
+          step.ref = ref; save(); renderSteps();
+          // 다른 동작과 너무 비슷한지 경고
+          let warn='';
+          data.steps.forEach((o,i)=>{ if(i!==cur && validRef(o.ref)){ const c=compare(ref,o.ref); if(c.worstDiff<25) warn=' ⚠ "'+o.name+'"과 거의 같은 자세입니다'; } });
+          $('feedback').textContent='✅ 저장 완료 (흔들림 '+Math.round(shake)+'°)'+warn;
+        }
       }
     }
     return;
@@ -303,16 +341,26 @@ function handle(res, now){
   if(mode!=='practice') return;
 
   const step=data.steps[cur];
-  if(!step){ return; }
-  if(!step.ref){ $('feedback').textContent='이 동작은 정답이 아직 없습니다 (정답 녹화 모드에서 저장)'; setBar(0,'#e33'); return; }
+  if(!step) return;
+  if(!validRef(step.ref)){ $('feedback').textContent='이 동작은 정답이 없습니다 (정답 녹화 모드에서 저장)'; setBar(0,'#e33'); return; }
 
   const tol=+$('tol').value, holdSec=+$('hold').value, useYaw=$('useYaw').checked;
   const c = compare(f, step.ref);
-  const okAngles = c.mean <= tol && c.worstDiff <= tol*2;
-  const okYaw = !useYaw || c.yd <= 35;
-  const closeness = Math.max(0, 1 - c.mean/(tol*2.5));
 
-  if(okAngles && okYaw){
+  // 다른 동작이 더 비슷하면 통과 안 시킴
+  let other=null, otherScore=Infinity;
+  data.steps.forEach((o,i)=>{
+    if(i===cur || !validRef(o.ref)) return;
+    const oc=compare(f,o.ref);
+    if(oc.mean<otherScore){ otherScore=oc.mean; other=o; }
+  });
+  const isClosest = !other || c.mean < otherScore*0.85;
+
+  const okLimbs = c.worstDiff <= tol;
+  const okYaw = !useYaw || c.yd <= 40;
+  const closeness = Math.max(0, 1 - c.worstDiff/(tol*2));
+
+  if(okLimbs && okYaw && isClosest){
     if(holdStart===null) holdStart=now;
     const p=(now-holdStart)/(holdSec*1000);
     setBar(p,'#4c4');
@@ -326,15 +374,16 @@ function handle(res, now){
     holdStart=null;
     setBar(closeness, closeness>0.6?'#fa3':'#e33');
     let hint;
-    if(!okYaw) hint='몸 방향을 확인하세요';
-    else hint = JOINTS[c.worst].name+' 확인 ('+Math.round(c.worstDiff)+'° 차이)';
+    if(!okLimbs) hint=SEGS[c.worst].name+' 확인 ('+Math.round(c.worstDiff)+'° 차이)';
+    else if(!okYaw) hint='몸 방향을 확인하세요';
+    else hint='"'+other.name+'" 동작과 더 비슷해요';
     $('feedback').textContent=hint;
   }
 }
 
 // ---------- 녹화 ----------
 function capture(){
-  if(!running){ alert('먼저 카메라를 켜주세요'); return; }
+  if(!running || !landmarker){ alert('먼저 카메라를 켜주세요'); return; }
   if(capturing) return;
   const startAt = performance.now()+3000;
   capturing={ startAt, samples:[] };
@@ -372,7 +421,9 @@ $('exportBtn').onclick=()=>{
 $('importBtn').onclick=()=>$('importFile').click();
 $('importFile').onchange=async e=>{
   const file=e.target.files[0]; if(!file) return;
-  try{ const d=JSON.parse(await file.text()); if(!Array.isArray(d.steps)) throw 0; data=d; cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); }
+  try{ const d=JSON.parse(await file.text()); if(!Array.isArray(d.steps)) throw 0;
+       d.steps.forEach(s=>{ if(!validRef(s.ref)) s.ref=null; });
+       data=d; cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); }
   catch(err){ alert('파일 형식이 맞지 않습니다'); }
 };
 const syncLabels=()=>{ $('tolV').textContent=$('tol').value; $('holdV').textContent=$('hold').value; };
