@@ -181,14 +181,32 @@ const DEFAULT_STEPS = [
 // ---------- 저장 (v2: 판정 방식이 바뀌어 예전 정답은 다시 녹화 필요) ----------
 // ---------- 연습 종류: 기본동작(팔만·정면) / 품새 ----------
 // 기본동작: 동작마다 [예비 → 실제]를 좌우 한 번씩 (①, ②). ②는 ①을 좌우 반전해서 자동으로 만듦
-const BASIC_MOVES = ['아래 막기','몸통 막기','얼굴 막기','손날 목치기','한손날 막기','아래 막고 지르기','양손날 막기 손끝 찌르기','제비품 목치기','몸통 바깥막기','등주먹 치기'];
-function buildBasicSteps(moves){
+// 동작마다 박자(단계) 목록. 기본은 [예비 → 동작], 특별한 동작은 따로 지정
+const BASIC_DEF = [
+  { name:'아래 막기' },
+  { name:'몸통 막기' },
+  { name:'얼굴 막기' },
+  { name:'손날 목치기' },
+  { name:'한손날 막기' },
+  { name:'아래 막고 지르기', phases:['예비','막기','지르기'] },
+  { name:'양손날 막기 손끝 찌르기', phases:['막기 예비','막기','찌르기 예비','찌르기'] },
+  { name:'제비품 목치기' },
+  { name:'몸통 바깥막기' },
+  { name:'등주먹 치기' },
+];
+const BASIC_MOVES = BASIC_DEF.map(d=>d.name);
+function buildBasicSteps(){
   const st=[{ name:'준비', key:'준비|act', mirror:false }];
-  moves.forEach(m=>{
-    st.push({ name:m+' ① 예비', key:m+'|prep', mirror:false });
-    st.push({ name:m+' ①',      key:m+'|act',  mirror:false });
-    st.push({ name:m+' ② 예비', key:m+'|prep', mirror:true });
-    st.push({ name:m+' ②',      key:m+'|act',  mirror:true });
+  BASIC_DEF.forEach(d=>{
+    const m=d.name;
+    ['①','②'].forEach((side,si)=>{
+      if(d.phases){
+        d.phases.forEach((ph,j)=> st.push({ name:m+' '+side+' '+ph, key:m+'|p'+j, mirror:si===1 }));
+      }else{
+        st.push({ name:m+' '+side+' 예비', key:m+'|prep', mirror:si===1 });
+        st.push({ name:m+' '+side,         key:m+'|act',  mirror:si===1 });
+      }
+    });
   });
   return st;
 }
@@ -205,7 +223,7 @@ function loadKind(k){
   if(k==='basic') data = { title:'기본동작', kind:'basic', moves:BASIC_MOVES.slice(), refs:{} };
   else data = { title:'태극 1장', steps: DEFAULT_STEPS.map(n => ({ name:n, ref:null })) };
   try { const s = localStorage.getItem(KINDS[k].key); if (s) data = JSON.parse(s); localStorage.setItem('practice_kind', k); } catch(e) {}
-  if(k==='basic'){ data.refs=data.refs||{}; data.moves=data.moves||BASIC_MOVES.slice(); data.steps = buildBasicSteps(data.moves); }
+  if(k==='basic'){ data.refs=data.refs||{}; data.moves=data.moves||BASIC_MOVES.slice(); data.moves = BASIC_MOVES.slice(); data.steps = buildBasicSteps(); }
 }
 function save(){ try { localStorage.setItem(KINDS[kind].key, JSON.stringify(kind==='basic' ? { title:data.title, kind:'basic', moves:data.moves, refs:data.refs } : data)); } catch(e) {} }
 const isBasic = () => kind==='basic';
@@ -649,7 +667,7 @@ $('importBtn').onclick=()=>$('importFile').click();
 $('importFile').onchange=async e=>{
   const file=e.target.files[0]; if(!file) return;
   try{ const d=JSON.parse(await file.text());
-       if(d.kind==='basic'){ if(!isBasic()) throw 0; data={ title:d.title||'기본동작', kind:'basic', moves:d.moves||BASIC_MOVES.slice(), refs:d.refs||{} }; data.steps=buildBasicSteps(data.moves); cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); return; }
+       if(d.kind==='basic'){ if(!isBasic()) throw 0; data={ title:d.title||'기본동작', kind:'basic', moves:d.moves||BASIC_MOVES.slice(), refs:d.refs||{} }; data.steps=buildBasicSteps(); cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); return; }
        if(isBasic() || !Array.isArray(d.steps)) throw 0;
        d.steps.forEach(s=>{ if(!validRef(s.ref)) s.ref=null; });
        data=d; cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); }
