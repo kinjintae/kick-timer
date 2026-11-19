@@ -52,7 +52,7 @@
     <canvas id="cv"></canvas>
     <div id="overlay"><div id="stepName">카메라를 켜주세요</div><div id="feedback"></div></div>
     <div id="countdown"></div>
-    <div id="dbg" style="position:absolute;left:8px;bottom:46px;background:#000b;color:#fff;font:13px/1.45 monospace;padding:8px 10px;border-radius:8px;white-space:pre;pointer-events:none;display:none"></div>
+    <div id="judgePanel" style="position:absolute;left:8px;bottom:46px;background:#000b;color:#fff;font:13px/1.45 monospace;padding:8px 10px;border-radius:8px;white-space:pre;pointer-events:none;display:none"></div>
     <div id="barWrap"><div id="bar"></div></div>
   </div>
   <aside>
@@ -365,8 +365,8 @@ function handle(res, now){
     const L=SEGS.map((sg,i)=>{ const d=Math.round(c.diffs[i]); return (d>tol?'✗ ':'✓ ')+sg.name.replace('(주먹 방향)','')+' '+d+'°'; });
     L.push((okYaw?'✓ ':'✗ ')+'몸 방향 '+Math.round(c.yd)+'°'+(useYaw?'':' (판정 안 함)'));
     L.push((isClosest?'✓ ':'✗ ')+'지금 동작 평균 '+Math.round(c.mean)+'°'+(other?' / 가장 비슷한 다른 동작 "'+other.name+'" '+Math.round(otherScore)+'°':''));
-    $('dbg').textContent=L.join('\n'); $('dbg').style.display='block';
-  } else $('dbg').style.display='none';
+    $('judgePanel').textContent=L.join('\n'); $('judgePanel').style.display='block';
+  } else $('judgePanel').style.display='none';
 
   if(okLimbs && okYaw && isClosest){
     if(holdStart===null) holdStart=now;
