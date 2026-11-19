@@ -35,8 +35,10 @@
   .row { display:flex; gap:6px; flex-wrap:wrap; }
   small { color:#999; }
   #floatBar { position:absolute; left:0; right:0; bottom:48px; display:flex; justify-content:center; gap:8px; padding:0 8px; }
-  #floatBar button { background:#000a; border-color:#666; padding:10px 14px; font-size:16px; }
+  #floatBar { gap:5px !important; }
+  #floatBar button { background:#000a; border-color:#666; padding:10px 11px; font-size:15px; white-space:nowrap; }
   #floatBar #fCapture { background:#e33; border-color:#e33; font-weight:700; display:none; }
+  #floatBar #fVoice { background:#36c; border-color:#36c; font-weight:700; display:none; }
   #sheetBtn, #sheetClose { display:none; }
   @media (max-width:900px){
     header { padding:6px 8px; gap:6px; }
@@ -79,6 +81,7 @@
       <button id="fPrev">◀</button>
       <button id="fReset">처음</button>
       <button id="fCapture">● 자세 저장</button>
+      <button id="fVoice">🎤 구령</button>
       <button id="fNext">▶</button>
       <button id="sheetBtn">⚙ 메뉴</button>
     </div>
@@ -100,6 +103,7 @@
       <small>순서에서 동작을 고르고 [자세 저장]을 누르세요. 3초 뒤 1.5초 동안 자세를 측정합니다. <b>돌지 말고 폰을 바라본 채 제자리에서</b> 동작하세요. 아이도 같은 방식으로 연습합니다. 관장님이 정확한 자세로 서 주세요.</small>
       <div class="row" style="margin-top:8px">
         <button id="captureBtn">자세 저장 (3초 후)</button>
+        <button id="voiceBtn">🎤 구령 녹음</button>
         <button id="clearBtn">이 동작 지우기</button>
       </div>
       <div class="row" style="margin-top:8px">
@@ -126,6 +130,7 @@
       <label style="display:none"><input type="checkbox" id="useYaw"> 몸 방향(돌기)도 판정 <small>— 정면 카메라라 부정확할 수 있음</small></label>
       <label><input type="checkbox" id="mirror" checked> 거울처럼 좌우 반전 표시</label>
       <label><input type="checkbox" id="shadow" checked> 쉐도우(따라 할 자세) 보기</label>
+      <label><input type="checkbox" id="sound" checked> 구령 소리 <small>— 녹음한 관장님 목소리, 없으면 기계 음성</small></label>
       <label><input type="checkbox" id="debug"> 판정 숫자 보기 (테스트용)</label>
       <label>AI 모델 <small>(바꾸면 카메라 다시 켜기)</small>
         <select id="model" style="width:100%;padding:6px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444">
@@ -183,28 +188,28 @@ const DEFAULT_STEPS = [
 // 기본동작: 동작마다 [예비 → 실제]를 좌우 한 번씩 (①, ②). ②는 ①을 좌우 반전해서 자동으로 만듦
 // 동작마다 박자(단계) 목록. 기본은 [예비 → 동작], 특별한 동작은 따로 지정
 const BASIC_DEF = [
-  { name:'아래 막기' },
-  { name:'몸통 막기' },
-  { name:'얼굴 막기' },
-  { name:'손날 목치기' },
-  { name:'한손날 막기' },
-  { name:'아래 막고 지르기', phases:['예비','막기','지르기'] },
-  { name:'양손날 막기 손끝 찌르기', phases:['막기 예비','막기','찌르기 예비','찌르기'] },
-  { name:'제비품 목치기' },
-  { name:'몸통 바깥막기' },
-  { name:'등주먹 치기' },
+  { name:'아래 막기',      cues:['아래','막기'] },
+  { name:'몸통 막기',      cues:['몸통','막기'] },
+  { name:'얼굴 막기',      cues:['얼굴','막기'] },
+  { name:'손날 목치기',    cues:['손날','목치기'] },
+  { name:'한손날 막기',    cues:['한손날','막기'] },
+  { name:'아래 막고 지르기', phases:['예비','막기','지르기'], cues:['아래','막고','지르기'] },
+  { name:'양손날 막기 손끝 찌르기', phases:['막기 예비','막기','찌르기 예비','찌르기'], cues:['양손날','막기','손끝','찌르기'] },
+  { name:'제비품 목치기',  cues:['제비품','목치기'] },
+  { name:'몸통 바깥막기',  cues:['몸통','바깥막기'] },
+  { name:'등주먹 치기',    cues:['등주먹','치기'] },
 ];
 const BASIC_MOVES = BASIC_DEF.map(d=>d.name);
 function buildBasicSteps(){
-  const st=[{ name:'준비', key:'준비|act', mirror:false }];
+  const st=[{ name:'준비', key:'준비|act', mirror:false, cue:'준비' }];
   BASIC_DEF.forEach(d=>{
     const m=d.name;
     ['①','②'].forEach((side,si)=>{
       if(d.phases){
-        d.phases.forEach((ph,j)=> st.push({ name:m+' '+side+' '+ph, key:m+'|p'+j, mirror:si===1 }));
+        d.phases.forEach((ph,j)=> st.push({ name:m+' '+side+' '+ph, key:m+'|p'+j, mirror:si===1, cue:(d.cues||[])[j]||ph }));
       }else{
-        st.push({ name:m+' '+side+' 예비', key:m+'|prep', mirror:si===1 });
-        st.push({ name:m+' '+side,         key:m+'|act',  mirror:si===1 });
+        st.push({ name:m+' '+side+' 예비', key:m+'|prep', mirror:si===1, cue:(d.cues||[])[0]||m });
+        st.push({ name:m+' '+side,         key:m+'|act',  mirror:si===1, cue:(d.cues||[])[1]||m });
       }
     });
   });
@@ -223,9 +228,9 @@ function loadKind(k){
   if(k==='basic') data = { title:'기본동작', kind:'basic', moves:BASIC_MOVES.slice(), refs:{} };
   else data = { title:'태극 1장', steps: DEFAULT_STEPS.map(n => ({ name:n, ref:null })) };
   try { const s = localStorage.getItem(KINDS[k].key); if (s) data = JSON.parse(s); localStorage.setItem('practice_kind', k); } catch(e) {}
-  if(k==='basic'){ data.refs=data.refs||{}; data.moves=data.moves||BASIC_MOVES.slice(); data.moves = BASIC_MOVES.slice(); data.steps = buildBasicSteps(); }
+  if(k==='basic'){ data.refs=data.refs||{}; data.voice=data.voice||{}; data.moves=data.moves||BASIC_MOVES.slice(); data.moves = BASIC_MOVES.slice(); data.steps = buildBasicSteps(); }
 }
-function save(){ try { localStorage.setItem(KINDS[kind].key, JSON.stringify(kind==='basic' ? { title:data.title, kind:'basic', moves:data.moves, refs:data.refs } : data)); } catch(e) {} }
+function save(){ try { localStorage.setItem(KINDS[kind].key, JSON.stringify(kind==='basic' ? { title:data.title, kind:'basic', moves:data.moves, refs:data.refs, voice:data.voice||{} } : data)); } catch(e) {} }
 const isBasic = () => kind==='basic';
 const MIN_PARTS = () => isBasic() ? 2 : 4;   // 판정에 필요한 최소 부위 수
 function validRef(r){ return r && Array.isArray(r.vecs) && r.vecs.length===SEGS.length; }
@@ -337,8 +342,8 @@ function renderSteps(){
     li.textContent=s.name;
     const t=document.createElement('span');
     t.className='tag'+(refOf(s)?' ok':'');
-    t.textContent = s.key!==undefined ? (refOf(s) ? (s.mirror ? '정답 있음(①을 좌우 반전)' : '정답 있음') : (s.mirror ? '①을 녹화하면 자동' : '정답 없음'))
-                  : (validRef(s.ref) ? '정답 있음' : (refOf(s) ? '정답 있음(같은 이름)' : '정답 없음'));
+    t.textContent = (s.key!==undefined && data.voice && data.voice[s.key] ? '🔊 ' : '') + (s.key!==undefined ? (refOf(s) ? (s.mirror ? '정답 있음(①을 좌우 반전)' : '정답 있음') : (s.mirror ? '①을 녹화하면 자동' : '정답 없음'))
+                  : (validRef(s.ref) ? '정답 있음' : (refOf(s) ? '정답 있음(같은 이름)' : '정답 없음')));
     li.appendChild(t);
     if(i===cur) li.classList.add('cur');
     if(passed.has(i)) li.classList.add('done');
@@ -361,6 +366,9 @@ function setMode(m){
   $('recordCard').style.display = m==='record' ? '' : 'none';
   ['addStepBtn','renameBtn','delStepBtn'].forEach(id=>$(id).style.display = isBasic() ? 'none' : '');
   $('fCapture').style.display = m==='record' ? 'inline-block' : 'none';
+  $('fVoice').style.display = (m==='record' && isBasic()) ? 'inline-block' : 'none';
+  $('fReset').style.display = m==='record' ? 'none' : '';
+  lastCued=-1;
   holdStart=null; updateTitle(m==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '');
 }
 
@@ -413,6 +421,62 @@ async function start(){
   }
 }
 
+// ---------- 구령 소리 ----------
+let lastCued=-1, cueAt=0, passAt=0, curAudio=null;
+function playCue(st){
+  if(!st || !$('sound').checked) return;
+  try{ if(curAudio){ curAudio.pause(); } }catch(e){}
+  const v = st.key!==undefined && data.voice ? data.voice[st.key] : null;
+  if(v){ curAudio=new Audio(v); curAudio.play().catch(()=>{}); return; }
+  if('speechSynthesis' in window){
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(st.cue || st.name.replace(/[①②]/g,''));
+    u.lang='ko-KR'; u.rate=1.0; u.pitch=1.0; speechSynthesis.speak(u);
+  }
+}
+function cueTick(now){
+  if(mode!=='practice' || !running) return;
+  const st=data.steps[cur]; if(!st) return;
+  if(cur!==lastCued){
+    if(now-passAt < 500) return;            // 통과 직후 잠깐 쉬고 다음 구령
+    lastCued=cur; cueAt=now; playCue(st);
+  }else if(!passed.has(cur) && now-cueAt > 7000){
+    cueAt=now; playCue(st);                 // 7초 동안 못 하면 한 번 더 불러줌
+  }
+}
+function unlockAudio(){
+  try{ const a=new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA='); a.play().catch(()=>{}); }catch(e){}
+  try{ if('speechSynthesis' in window){ const u=new SpeechSynthesisUtterance(' '); u.volume=0; speechSynthesis.speak(u); } }catch(e){}
+}
+
+// ---------- 구령 녹음 ----------
+let recBusy=false;
+async function recordVoice(){
+  const st=data.steps[cur];
+  if(!st || st.key===undefined){ alert('기본동작에서만 녹음할 수 있습니다'); return; }
+  if(recBusy) return;
+  if(!window.MediaRecorder){ alert('이 브라우저는 녹음을 지원하지 않습니다'); return; }
+  recBusy=true;
+  let stream;
+  try{ stream = await navigator.mediaDevices.getUserMedia({ audio:true }); }
+  catch(e){ recBusy=false; $('feedback').textContent='마이크 권한이 필요합니다: '+(e.message||e); return; }
+  const rec=new MediaRecorder(stream); const chunks=[];
+  rec.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+  rec.onstop=()=>{
+    stream.getTracks().forEach(t=>t.stop());
+    const blob=new Blob(chunks,{ type: rec.mimeType||'audio/webm' });
+    const fr=new FileReader();
+    fr.onload=()=>{ data.voice[st.key]=fr.result; save(); renderSteps(); $('countdown').textContent='';
+      $('feedback').textContent='🔊 "'+st.cue+'" 녹음 완료 (①·② 같이 사용). 다시 녹음하려면 한 번 더 누르세요';
+      try{ new Audio(fr.result).play(); }catch(e){} recBusy=false; };
+    fr.readAsDataURL(blob);
+  };
+  $('feedback').textContent='"'+st.cue+'" 라고 말할 준비…';
+  $('countdown').textContent='🎤';
+  setTimeout(()=>{ rec.start(); $('feedback').textContent='🔴 지금 말하세요: "'+st.cue+'"'; $('countdown').textContent='🔴';
+    setTimeout(()=>{ try{ rec.stop(); }catch(e){} }, 1600); }, 700);
+}
+
 function loop(){
   const now=performance.now();
   if(landmarker && video && video.readyState>=2 && now>lastTs){
@@ -431,6 +495,7 @@ function loop(){
     if(res) handle(res, now);
     if(res && res.landmarks && res.landmarks[0]) drawShadow(res.landmarks[0]);
   }
+  cueTick(performance.now());
   requestAnimationFrame(loop);
 }
 
@@ -538,6 +603,7 @@ function handle(res, now){
     $('feedback').textContent='좋아요! 그대로 유지';
     if(p>=1){
       passed.add(cur); holdStart=null;
+      passAt=now;
       if(cur < data.steps.length-1){ cur++; renderSteps(); updateTitle('👍 통과! 다음 동작'); }
       else {
         renderSteps();
@@ -632,7 +698,7 @@ function capture(){
 }
 
 // ---------- 버튼 ----------
-$('startCam').onclick=start;
+$('startCam').onclick=()=>{ unlockAudio(); start(); };
 $('flipCam').onclick=async()=>{
   facing = facing==='user' ? 'environment' : 'user';
   $('mirror').checked = facing==='user';
@@ -645,6 +711,8 @@ $('fPrev').onclick=()=>$('prevBtn').click();
 $('fNext').onclick=()=>$('nextBtn').click();
 $('fReset').onclick=()=>$('resetBtn').click();
 $('fCapture').onclick=capture;
+$('fVoice').onclick=recordVoice;
+$('voiceBtn').onclick=recordVoice;
 $('sheetBtn').onclick=()=>$('sheet').classList.add('open');
 $('sheetClose').onclick=()=>$('sheet').classList.remove('open');
 $('modeRecord').onclick=()=>setMode('record');
@@ -667,7 +735,7 @@ $('importBtn').onclick=()=>$('importFile').click();
 $('importFile').onchange=async e=>{
   const file=e.target.files[0]; if(!file) return;
   try{ const d=JSON.parse(await file.text());
-       if(d.kind==='basic'){ if(!isBasic()) throw 0; data={ title:d.title||'기본동작', kind:'basic', moves:d.moves||BASIC_MOVES.slice(), refs:d.refs||{} }; data.steps=buildBasicSteps(); cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); return; }
+       if(d.kind==='basic'){ if(!isBasic()) throw 0; data={ title:d.title||'기본동작', kind:'basic', moves:d.moves||BASIC_MOVES.slice(), refs:d.refs||{}, voice:d.voice||{} }; data.steps=buildBasicSteps(); cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); return; }
        if(isBasic() || !Array.isArray(d.steps)) throw 0;
        d.steps.forEach(s=>{ if(!validRef(s.ref)) s.ref=null; });
        data=d; cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); }
