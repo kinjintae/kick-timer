@@ -357,19 +357,28 @@ function handle(res, now){
       $('feedback').textContent='측정 중… 움직이지 마세요!';
       if(now>=capturing.startAt+1500){
         const step=data.steps[cur];
-        const ref = avgFeatures(capturing.samples);
-        // 흔들림 검사: 측정 중 각 부위가 평균에서 얼마나 벗어났나
-        let shake=0;
-        capturing.samples.forEach(s=>{ const c=compare(s,ref); if(c.n>0 && c.worstDiff>shake) shake=c.worstDiff; });
+        const samples = capturing.samples;
+        const ref = avgFeatures(samples);
         capturing=null; $('countdown').textContent='';
-        if(shake>18){
-          $('feedback').textContent='❌ 흔들림이 커서 저장하지 않았습니다 ('+Math.round(shake)+'°). 멈춘 자세로 다시 해주세요';
+        // 부위별 흔들림: 측정 중 평균 방향에서 얼마나 벗어났나 (보인 프레임만)
+        const excluded=[]; let maxShake=0;
+        SEGS.forEach((sg,i)=>{
+          let spread=0, seen=0;
+          samples.forEach(f=>{ if(!f.vis || f.vis[i]>=VIS_MIN){ seen++; spread=Math.max(spread, angBetween(f.vecs[i], ref.vecs[i])); } });
+          const stable = seen >= samples.length*0.7 && spread <= 20;
+          if(!stable){ ref.vis[i]=0; excluded.push(sg.name.replace('(주먹 방향)','')); }
+          else maxShake=Math.max(maxShake, spread);
+        });
+        const good = SEGS.length - excluded.length;
+        if(samples.length < 5){
+          $('feedback').textContent='❌ 측정 중 사람을 놓쳤습니다. 전신이 보이게 서서 다시 해주세요';
+        }else if(good < 4){
+          $('feedback').textContent='❌ 제대로 보이는 부위가 '+good+'개뿐입니다 (가려지거나 흔들림: '+excluded.join(', ')+'). 카메라 위치를 바꿔보세요';
         }else{
           step.ref = ref; save(); renderSteps();
-          // 다른 동작과 너무 비슷한지 경고
           let warn='';
-          data.steps.forEach((o,i)=>{ if(i!==cur && validRef(o.ref)){ const c=compare(ref,o.ref); if(c.worstDiff<25) warn=' ⚠ "'+o.name+'"과 거의 같은 자세입니다'; } });
-          $('feedback').textContent='✅ 저장 완료 (흔들림 '+Math.round(shake)+'°)'+warn;
+          data.steps.forEach((o,i)=>{ if(i!==cur && validRef(o.ref)){ const c=compare(ref,o.ref); if(c.n>=4 && c.worstDiff<25) warn=' ⚠ "'+o.name+'"과 거의 같은 자세입니다'; } });
+          $('feedback').textContent='✅ 저장 완료 (판정 부위 '+good+'개'+(excluded.length?', 제외: '+excluded.join(', '):'')+')'+warn;
         }
       }
     }
