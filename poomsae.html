@@ -97,7 +97,7 @@
     </div>
     <div class="card" id="recordCard" style="display:none">
       <h3>정답 녹화</h3>
-      <small>순서에서 동작을 고르고 [자세 저장]을 누르세요. 3초 뒤 1.5초 동안 자세를 측정합니다. 흔들리면 저장을 거부하니 멈춘 자세로 서 주세요. 관장님이 정확한 자세로 서 주세요.</small>
+      <small>순서에서 동작을 고르고 [자세 저장]을 누르세요. 3초 뒤 1.5초 동안 자세를 측정합니다. <b>돌지 말고 폰을 바라본 채 제자리에서</b> 동작하세요. 아이도 같은 방식으로 연습합니다. 관장님이 정확한 자세로 서 주세요.</small>
       <div class="row" style="margin-top:8px">
         <button id="captureBtn">자세 저장 (3초 후)</button>
         <button id="clearBtn">이 동작 지우기</button>
@@ -111,7 +111,7 @@
     <div class="card">
       <h3>판정 설정</h3>
       <label>허용 오차: <b id="tolV"></b>°  <small>(팔·다리 중 가장 틀린 부위 기준, 작을수록 엄격)</small>
-        <input type="range" id="tol" min="10" max="50" value="28"></label>
+        <input type="range" id="tol" min="10" max="60" value="35"></label>
       <label>유지 시간: <b id="holdV"></b>초
         <input type="range" id="hold" min="0.3" max="2" step="0.1" value="1.0"></label>
       <label><input type="checkbox" id="useYaw"> 몸 방향(돌기)도 판정 <small>— 정면 카메라라 부정확할 수 있음</small></label>
@@ -187,6 +187,9 @@ let mode = 'practice';
 let cur = 0;
 let passed = new Set();
 let holdStart = null;
+let wrongStart = null;
+let mistakes = [];          // { step: 단계 이름, did: 대신 한 동작 }
+const mistakeLogged = new Set();
 let landmarker = null, video = null, running = false, drawer = null;
 let capturing = null;
 let lastTs = -1;
@@ -351,6 +354,8 @@ function handle(res, now){
   const visible = inFrame && [11,12,23,24].every(i => (lm[i].visibility ?? 1) > 0.3);
   if(!visible){ holdStart=null; setBar(0,'#e33'); $('feedback').textContent='머리부터 발끝까지 화면에 들어오게 뒤로 가 주세요'; return; }
   const f = features(smoothWorld(world), lm);
+  const dir = estimateDirection(lm);
+  const dirLine = '▶ 방향 추정: '+dir.label+'   (어깨비 '+dir.ratio.toFixed(2)+' / 코 '+(dir.nose>=0?'+':'')+dir.nose.toFixed(2)+' / 얼굴 '+dir.face.toFixed(2)+')';
 
   // ----- 정답 녹화 -----
   if(capturing){
@@ -388,7 +393,7 @@ function handle(res, now){
   }
   if(mode!=='practice'){
     if($('debug').checked){
-      $('judgePanel').textContent = '[녹화 모드] 부위별 보임 점수 (0~1)\n' + SEGS.map((sg,i)=>{ const v=f.vis[i]; return (v>=VIS_MIN?'✓ ':'– ')+sg.name.replace('(주먹 방향)','')+' '+v.toFixed(2); }).join('\n');
+      $('judgePanel').textContent = dirLine+'\n[녹화 모드] 부위별 보임 점수 (0~1)\n' + SEGS.map((sg,i)=>{ const v=f.vis[i]; return (v>=VIS_MIN?'✓ ':'– ')+sg.name.replace('(주먹 방향)','')+' '+v.toFixed(2); }).join('\n');
       $('judgePanel').style.display='block';
     } else $('judgePanel').style.display='none';
     return;
@@ -402,11 +407,13 @@ function handle(res, now){
   const c = compare(f, step.ref);
 
   // 다른 동작이 더 비슷하면 통과 안 시킴
-  let other=null, otherScore=Infinity;
+  let other=null, otherScore=Infinity, otherC=null;
   data.steps.forEach((o,i)=>{
     if(i===cur || !validRef(o.ref)) return;
     const oc=compare(f,o.ref);
-    if(oc.mean<otherScore){ otherScore=oc.mean; other=o; }
+    // 같은 기술이 반복되는 동작(이름에서 번호 뺀 부분이 같음)은 '틀림'으로 보지 않음
+    if(o.name.replace(/^[0-9]+\.\s*/,'')===step.name.replace(/^[0-9]+\.\s*/,'')) return;
+    if(oc.mean<otherScore){ otherScore=oc.mean; other=o; otherC=oc; }
   });
   const isClosest = !other || c.mean <= otherScore;
 
@@ -417,10 +424,11 @@ function handle(res, now){
     const L=SEGS.map((sg,i)=>{ const nm=sg.name.replace('(주먹 방향)',''); const v=' (보임 '+f.vis[i].toFixed(2)+')'; if(c.diffs[i]===null) return '– '+nm+' 제외'+v; const d=Math.round(c.diffs[i]); return (d>tol?'✗ ':'✓ ')+nm+' '+d+'°'+v; });
     L.push((okYaw?'✓ ':'✗ ')+'몸 방향 '+Math.round(c.yd)+'°'+(useYaw?'':' (판정 안 함)'));
     L.push((isClosest?'✓ ':'✗ ')+'지금 동작 평균 '+Math.round(c.mean)+'°'+(other?' / 가장 비슷한 다른 동작 "'+other.name+'" '+Math.round(otherScore)+'°':''));
-    $('judgePanel').textContent=L.join('\n'); $('judgePanel').style.display='block';
+    $('judgePanel').textContent=dirLine+'\n'+L.join('\n'); $('judgePanel').style.display='block';
   } else $('judgePanel').style.display='none';
 
   if(okLimbs && okYaw && isClosest){
+    wrongStart=null;
     if(holdStart===null) holdStart=now;
     const p=(now-holdStart)/(holdSec*1000);
     setBar(p,'#4c4');
@@ -428,10 +436,25 @@ function handle(res, now){
     if(p>=1){
       passed.add(cur); holdStart=null;
       if(cur < data.steps.length-1){ cur++; renderSteps(); updateTitle('👍 통과! 다음 동작'); }
-      else { renderSteps(); updateTitle('🎉 끝까지 완료! 잘했어요'); }
+      else {
+        renderSteps();
+        if(!mistakes.length) updateTitle('🎉 끝까지 완료! 실수 없이 성공!');
+        else updateTitle('🎉 완료! 실수 '+mistakes.length+'번: '+mistakes.map(m=>m.step.split('.')[0]+'번('+m.did+'로 착각)').join(', '));
+      }
     }
   }else{
     holdStart=null;
+    // 다른 동작을 또렷하게 하고 있으면 = 순서 착각(손바뀜·동작바뀜)
+    const doingOther = other && !isClosest && otherC.n>=4 && otherC.worstDiff<=tol;
+    if(doingOther){
+      if(wrongStart===null) wrongStart=now;
+      if(now-wrongStart >= holdSec*1000){
+        if(!mistakeLogged.has(cur)){ mistakeLogged.add(cur); mistakes.push({ step:step.name, did:other.name }); }
+        setBar(1,'#e33');
+        $('feedback').textContent='❌ 틀렸어요! 그건 "'+other.name+'" 동작이에요. 손과 발을 다시 생각해 보세요';
+        return;
+      }
+    } else wrongStart=null;
     setBar(closeness, closeness>0.6?'#fa3':'#e33');
     let hint;
     if(c.n<4) hint='팔다리가 너무 많이 가려졌어요. 카메라 위치를 바꿔보세요';
@@ -440,6 +463,29 @@ function handle(res, now){
     else hint='"'+other.name+'" 동작과 더 비슷해요';
     $('feedback').textContent=hint;
   }
+}
+
+// ---------- 방향 추정 (화면 2D 좌표만 사용: AI의 좌/우 이름표에 의존하지 않음) ----------
+// 어깨비 = 화면상 어깨 너비 ÷ 몸통 길이 → 정면/뒤는 넓고, 옆으로 서면 좁음
+// 코 = 코가 어깨 가운데에서 어느 쪽으로 치우쳤나 → 옆으로 섰을 때 어느 쪽을 보는지
+// 얼굴 = 코·눈의 보임 점수 → 정면과 뒤를 구분
+const dirHist = [];
+function estimateDirection(lm){
+  const W = cv.width||1, H = cv.height||1;
+  const px = i => [lm[i].x*W, lm[i].y*H];
+  const [ax,ay]=px(11), [bx,by]=px(12), [cx,cy]=px(23), [dx,dy]=px(24), [nx]=px(0);
+  const msx=(ax+bx)/2, msy=(ay+by)/2, mhx=(cx+dx)/2, mhy=(cy+dy)/2;
+  const torso = Math.hypot(msx-mhx, msy-mhy) || 1;
+  const ratio = Math.abs(ax-bx)/torso;
+  const nose = (nx-msx)/torso;
+  const face = ([0,2,5].reduce((s,i)=>s+(lm[i].visibility??1),0))/3;
+  let d;
+  if(ratio < 0.45) d = nose > 0 ? '왼쪽으로 돈 상태' : '오른쪽으로 돈 상태';   // 카메라를 보던 사람 기준
+  else d = face > 0.7 ? '정면(카메라 쪽)' : '뒤돌아 선 상태';
+  dirHist.push(d); if(dirHist.length>12) dirHist.shift();
+  const cnt={}; dirHist.forEach(x=>cnt[x]=(cnt[x]||0)+1);
+  const label = Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
+  return { label, ratio, nose, face };
 }
 
 // ---------- 녹화 ----------
@@ -474,7 +520,7 @@ $('sheetClose').onclick=()=>$('sheet').classList.remove('open');
 $('modeRecord').onclick=()=>setMode('record');
 $('prevBtn').onclick=()=>{ if(cur>0){cur--; holdStart=null; renderSteps(); updateTitle('');} };
 $('nextBtn').onclick=()=>{ if(cur<data.steps.length-1){cur++; holdStart=null; renderSteps(); updateTitle('');} };
-$('resetBtn').onclick=()=>{ cur=0; passed.clear(); holdStart=null; renderSteps(); updateTitle(''); };
+$('resetBtn').onclick=()=>{ cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear(); renderSteps(); updateTitle(''); };
 $('captureBtn').onclick=capture;
 $('clearBtn').onclick=()=>{ data.steps[cur].ref=null; save(); renderSteps(); };
 $('addStepBtn').onclick=()=>{ const n=prompt('동작 이름 (예: 5. 왼 앞굽이 아래막기)'); if(n){ data.steps.splice(cur+1,0,{name:n,ref:null}); cur++; save(); renderSteps(); updateTitle(''); } };
