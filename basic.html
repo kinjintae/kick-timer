@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>품새 연습기 (시제품)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: 'Pretendard','Malgun Gothic',sans-serif; background:#111; color:#eee; }
+  header { padding:10px 16px; background:#1c1c1c; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0 12px 0 0; color:#ffd400; }
+  button { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid #444; background:#2a2a2a; color:#eee; cursor:pointer; }
+  button.on { background:#ffd400; color:#111; border-color:#ffd400; font-weight:700; }
+  button:disabled { opacity:.4; cursor:default; }
+  main { display:flex; gap:12px; padding:12px; }
+  #stage { position:relative; flex:1; background:#000; border-radius:12px; overflow:hidden; min-height:40vh; }
+  #stage canvas { width:100%; height:auto; max-height:85vh; object-fit:contain; display:block; margin:0 auto; }
+  #overlay { position:absolute; left:0; right:0; top:0; padding:16px; text-align:center; pointer-events:none; }
+  #stepName { font-size:clamp(22px,4vw,48px); font-weight:800; text-shadow:0 2px 6px #000; }
+  #feedback { font-size:clamp(16px,2.4vw,28px); margin-top:6px; text-shadow:0 2px 6px #000; }
+  #countdown { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:160px; font-weight:900; color:#ffd400; text-shadow:0 4px 20px #000; pointer-events:none; }
+  #barWrap { position:absolute; left:16px; right:16px; bottom:16px; height:22px; background:#333a; border-radius:11px; overflow:hidden; }
+  #bar { height:100%; width:0; background:#e33; transition:width .1s; }
+  aside { width:320px; display:flex; flex-direction:column; gap:10px; }
+  .card { background:#1c1c1c; border-radius:12px; padding:12px; }
+  .card h3 { margin:0 0 8px; font-size:15px; color:#ffd400; }
+  ol { margin:0; padding-left:22px; max-height:38vh; overflow:auto; }
+  li { padding:5px 4px; border-radius:6px; cursor:pointer; }
+  li.cur { background:#ffd40033; }
+  li.done { color:#6c6; }
+  li .tag { font-size:12px; margin-left:6px; color:#888; }
+  li .tag.ok { color:#6c6; }
+  label { display:block; font-size:13px; margin:6px 0; }
+  input[type=range] { width:100%; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  small { color:#999; }
+  #floatBar { position:absolute; left:0; right:0; bottom:48px; display:flex; justify-content:center; gap:8px; padding:0 8px; }
+  #floatBar button { background:#000a; border-color:#666; padding:10px 14px; font-size:16px; }
+  #floatBar #fCapture { background:#e33; border-color:#e33; font-weight:700; display:none; }
+  #sheetBtn, #sheetClose { display:none; }
+  @media (max-width:900px){
+    header { padding:6px 8px; gap:6px; }
+    header h1 { display:none; }
+    header button { padding:6px 10px; font-size:14px; }
+    header span { display:none; }
+    body { display:flex; flex-direction:column; height:100dvh; overflow:hidden; }
+    main { padding:0; display:block; flex:1; min-height:0; }
+    #stage { border-radius:0; height:100%; min-height:0; }
+    #stage canvas { width:100%; height:100%; max-height:none; }
+    #stepName { font-size:24px; }
+    #feedback { font-size:16px; }
+    #judgePanel { font-size:11px !important; line-height:1.35 !important; bottom:100px !important; }
+    #barWrap { bottom:14px; height:18px; }
+    #sheetBtn, #sheetClose { display:inline-block; }
+    aside { position:fixed; left:0; right:0; bottom:0; max-height:75dvh; overflow:auto; width:auto;
+            background:#111; border-radius:16px 16px 0 0; padding:10px; box-shadow:0 -4px 20px #000;
+            transform:translateY(105%); transition:transform .25s; z-index:10; }
+    aside.open { transform:none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>품새 연습기</h1>
+  <button id="modePractice" class="on">연습 모드</button>
+  <button id="modeRecord">정답 녹화 모드</button>
+  <span style="flex:1"></span>
+  <button id="startCam">카메라 켜기</button>
+  <button id="flipCam">앞/뒤 카메라</button>
+  <button id="fullBtn">전체화면</button>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="overlay"><div id="stepName">카메라를 켜주세요</div><div id="feedback"></div></div>
+    <div id="countdown"></div>
+    <div id="judgePanel" style="position:absolute;left:8px;bottom:46px;background:#000b;color:#fff;font:13px/1.45 monospace;padding:8px 10px;border-radius:8px;white-space:pre;pointer-events:none;display:none"></div>
+    <div id="floatBar">
+      <button id="fPrev">◀</button>
+      <button id="fReset">처음</button>
+      <button id="fCapture">● 자세 저장</button>
+      <button id="fNext">▶</button>
+      <button id="sheetBtn">⚙ 메뉴</button>
+    </div>
+    <div id="barWrap"><div id="bar"></div></div>
+  </div>
+  <aside id="sheet">
+    <button id="sheetClose" style="width:100%">닫기 ▼</button>
+    <div class="card">
+      <h3>동작 순서</h3>
+      <ol id="steps"></ol>
+      <div class="row" style="margin-top:8px">
+        <button id="prevBtn">◀ 이전</button>
+        <button id="nextBtn">다음 ▶</button>
+        <button id="resetBtn">처음부터</button>
+      </div>
+    </div>
+    <div class="card" id="recordCard" style="display:none">
+      <h3>정답 녹화</h3>
+      <small>순서에서 동작을 고르고 [자세 저장]을 누르세요. 3초 뒤 1.5초 동안 자세를 측정합니다. <b>돌지 말고 폰을 바라본 채 제자리에서</b> 동작하세요. 아이도 같은 방식으로 연습합니다. 관장님이 정확한 자세로 서 주세요.</small>
+      <div class="row" style="margin-top:8px">
+        <button id="captureBtn">자세 저장 (3초 후)</button>
+        <button id="clearBtn">이 동작 지우기</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="addStepBtn">동작 추가</button>
+        <button id="renameBtn">이름 바꾸기</button>
+        <button id="delStepBtn">동작 삭제</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>연습 종류</h3>
+      <select id="kindSel" style="width:100%;padding:8px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444;font-size:15px">
+        <option value="basic">기본동작 (정면, 제자리, 팔만 판정)</option>
+        <option value="poomsae">품새 (방향 전환 포함)</option>
+      </select>
+      <small>종류마다 정답이 따로 저장됩니다.</small>
+    </div>
+    <div class="card">
+      <h3>판정 설정</h3>
+      <label>허용 오차: <b id="tolV"></b>°  <small>(팔·다리 중 가장 틀린 부위 기준, 작을수록 엄격)</small>
+        <input type="range" id="tol" min="10" max="60" value="35"></label>
+      <label>유지 시간: <b id="holdV"></b>초
+        <input type="range" id="hold" min="0.3" max="2" step="0.1" value="1.0"></label>
+      <label><input type="checkbox" id="useDir" checked> 방향 전환 판정 <small>— 정면/왼쪽/오른쪽 구분</small></label>
+      <label style="display:none"><input type="checkbox" id="useYaw"> 몸 방향(돌기)도 판정 <small>— 정면 카메라라 부정확할 수 있음</small></label>
+      <label><input type="checkbox" id="mirror" checked> 거울처럼 좌우 반전 표시</label>
+      <label><input type="checkbox" id="shadow" checked> 쉐도우(따라 할 자세) 보기</label>
+      <label><input type="checkbox" id="debug"> 판정 숫자 보기 (테스트용)</label>
+      <label>AI 모델 <small>(바꾸면 카메라 다시 켜기)</small>
+        <select id="model" style="width:100%;padding:6px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444">
+          <option value="full">정밀 (권장)</option>
+          <option value="lite">가벼움 (느린 폰용, 떨림 큼)</option>
+          <option value="heavy">최고 정밀 (최신 폰/PC)</option>
+        </select></label>
+    </div>
+    <div class="card">
+      <h3>데이터</h3>
+      <div class="row">
+        <button id="exportBtn">파일로 내보내기</button>
+        <button id="importBtn">불러오기</button>
+        <input type="file" id="importFile" accept=".json" style="display:none">
+      </div>
+      <small>정답 자세는 이 브라우저에 자동 저장됩니다. 다른 기기로 옮길 때는 파일로 내보내세요.</small>
+    </div>
+  </aside>
+</main>
+
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+// ---------- 판정 부위: 팔·다리 마디의 "방향" ----------
+// MediaPipe 번호: 11/12 어깨, 13/14 팔꿈치, 15/16 손목, 23/24 엉덩이, 25/26 무릎, 27/28 발목
+// 각 마디가 몸통 기준으로 어느 쪽을 향하는지 비교 → 아래막기(팔이 아래)와 지르기(팔이 앞)를 구분
+const SEGS = [
+  { name:'왼쪽 위팔',   a:11, b:13 },
+  { name:'왼쪽 아래팔(주먹 방향)', a:13, b:15 },
+  { name:'오른쪽 위팔', a:12, b:14 },
+  { name:'오른쪽 아래팔(주먹 방향)', a:14, b:16 },
+  { name:'왼쪽 허벅지', a:23, b:25 },
+  { name:'왼쪽 정강이', a:25, b:27 },
+  { name:'오른쪽 허벅지', a:24, b:26 },
+  { name:'오른쪽 정강이', a:26, b:28 },
+];
+const KEY_POINTS = [11,12,13,14,15,16,23,24,25,26,27,28];
+const MODEL_URL = {
+  lite:  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  full:  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  heavy: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+};
+
+const DEFAULT_STEPS = [
+  '준비',
+  '1. 왼 앞서기 아래막기',
+  '2. 오른 앞서기 몸통반대지르기',
+  '3. 오른 앞서기 아래막기',
+  '4. 왼 앞서기 몸통반대지르기',
+];
+
+// ---------- 저장 (v2: 판정 방식이 바뀌어 예전 정답은 다시 녹화 필요) ----------
+// ---------- 연습 종류: 기본동작(팔만·정면) / 품새 ----------
+// 기본동작: 동작마다 [예비 → 실제]를 좌우 한 번씩 (①, ②). ②는 ①을 좌우 반전해서 자동으로 만듦
+const BASIC_MOVES = ['아래 막기','몸통 막기','얼굴 막기','손날 목치기','한손날 막기','아래 막고 지르기','양손날 막기 손끝 찌르기','제비품 목치기','몸통 바깥막기','등주먹 치기'];
+function buildBasicSteps(moves){
+  const st=[{ name:'준비', key:'준비|act', mirror:false }];
+  moves.forEach(m=>{
+    st.push({ name:m+' ① 예비', key:m+'|prep', mirror:false });
+    st.push({ name:m+' ①',      key:m+'|act',  mirror:false });
+    st.push({ name:m+' ② 예비', key:m+'|prep', mirror:true });
+    st.push({ name:m+' ②',      key:m+'|act',  mirror:true });
+  });
+  return st;
+}
+const KINDS = {
+  basic:   { key:'basic_proto_v2',   title:'기본동작' },
+  poomsae: { key:'poomsae_proto_v2', title:'태극 1장' },
+};
+let kind = 'basic';
+try { kind = localStorage.getItem('practice_kind') || 'basic'; } catch(e) {}
+if(!KINDS[kind]) kind='basic';
+let data;
+function loadKind(k){
+  kind=k;
+  if(k==='basic') data = { title:'기본동작', kind:'basic', moves:BASIC_MOVES.slice(), refs:{} };
+  else data = { title:'태극 1장', steps: DEFAULT_STEPS.map(n => ({ name:n, ref:null })) };
+  try { const s = localStorage.getItem(KINDS[k].key); if (s) data = JSON.parse(s); localStorage.setItem('practice_kind', k); } catch(e) {}
+  if(k==='basic'){ data.refs=data.refs||{}; data.moves=data.moves||BASIC_MOVES.slice(); data.steps = buildBasicSteps(data.moves); }
+}
+function save(){ try { localStorage.setItem(KINDS[kind].key, JSON.stringify(kind==='basic' ? { title:data.title, kind:'basic', moves:data.moves, refs:data.refs } : data)); } catch(e) {} }
+const isBasic = () => kind==='basic';
+const MIN_PARTS = () => isBasic() ? 2 : 4;   // 판정에 필요한 최소 부위 수
+function validRef(r){ return r && Array.isArray(r.vecs) && r.vecs.length===SEGS.length; }
+// 같은 이름의 동작은 정답 하나를 같이 씀 (예: '왼 아래막기'를 한 번만 녹화)
+// 좌우 반전: 왼쪽·오른쪽 부위를 바꾸고 좌우 성분을 뒤집음
+const SEG_PAIR=[2,3,0,1,6,7,4,5];
+const PT_PAIR={0:0,11:12,12:11,13:14,14:13,15:16,16:15,23:24,24:23,25:26,26:25,27:28,28:27};
+function mirrorRef(r){
+  if(!r) return null;
+  const vecs = SEG_PAIR.map(j=>[-r.vecs[j][0], r.vecs[j][1], r.vecs[j][2]]);
+  const vis = r.vis ? SEG_PAIR.map(j=>r.vis[j]) : null;
+  let pts=null;
+  if(r.pts){ pts={}; Object.keys(r.pts).forEach(k=>{ const q=r.pts[PT_PAIR[k]]; if(q) pts[k]=[-q[0], q[1]]; }); }
+  return { vecs, vis, yaw:r.yaw, dir:r.dir, pts };
+}
+function refOf(st){
+  if(st.key!==undefined){ const r=data.refs[st.key]; return validRef(r) ? (st.mirror ? mirrorRef(r) : r) : null; }
+  if(validRef(st.ref)) return st.ref; const o=data.steps.find(x=>x.name===st.name && validRef(x.ref)); return o?o.ref:null;
+}
+loadKind(kind);
+
+// ---------- 상태 ----------
+let mode = 'practice';
+let cur = 0;
+let passed = new Set();
+let holdStart = null;
+let wrongStart = null;
+let mistakes = [];          // { step: 단계 이름, did: 대신 한 동작 }
+const mistakeLogged = new Set();
+let landmarker = null, video = null, running = false, drawer = null;
+let capturing = null;
+let lastTs = -1;
+let facing = 'user';
+let smooth = null;          // 떨림 줄이기용 평균 좌표
+const SMOOTH = 0.35;        // 0~1, 작을수록 부드럽고 느림
+
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+
+// ---------- 벡터 계산 ----------
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const norm=a=>{ const n=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/n,a[1]/n,a[2]/n]; };
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const angBetween=(a,b)=>Math.acos(Math.max(-1,Math.min(1,dot(a,b))))*180/Math.PI;
+
+function smoothWorld(world){
+  const p = world.map(l=>[l.x,l.y,l.z]);
+  if(!smooth) smooth = p;
+  else smooth = smooth.map((s,i)=>[s[0]+(p[i][0]-s[0])*SMOOTH, s[1]+(p[i][1]-s[1])*SMOOTH, s[2]+(p[i][2]-s[2])*SMOOTH]);
+  return smooth;
+}
+
+// 몸통 기준 좌표계: 가로=어깨선, 세로=엉덩이→어깨, 앞뒤=둘의 수직
+// 쉐도우용 2D 좌표: 어깨 가운데 기준, 몸통 길이로 나눔 (키가 달라도 겹쳐 그릴 수 있게)
+const PT_IDS=[0,11,12,13,14,15,16,23,24];
+function bodyAnchor(lm){
+  const W=cv.width||1, H=cv.height||1;
+  const mx=(lm[11].x+lm[12].x)/2*W, my=(lm[11].y+lm[12].y)/2*H;
+  const hx=(lm[23].x+lm[24].x)/2*W, hy=(lm[23].y+lm[24].y)/2*H;
+  return { mx, my, t: Math.hypot(mx-hx, my-hy)||1, W, H };
+}
+function pts2d(lm){
+  const a=bodyAnchor(lm), o={};
+  PT_IDS.forEach(i=>{ o[i]=[(lm[i].x*a.W-a.mx)/a.t, (lm[i].y*a.H-a.my)/a.t]; });
+  return o;
+}
+function features(P, lm){
+  const midSh=[(P[11][0]+P[12][0])/2,(P[11][1]+P[12][1])/2,(P[11][2]+P[12][2])/2];
+  const midHip=[(P[23][0]+P[24][0])/2,(P[23][1]+P[24][1])/2,(P[23][2]+P[24][2])/2];
+  const up = norm(sub(midSh, midHip));
+  let X = sub(P[11], P[12]);
+  const k = dot(X,up); X = norm([X[0]-k*up[0], X[1]-k*up[1], X[2]-k*up[2]]);
+  const Z = cross(X, up);
+  const vecs = SEGS.map(s=>{ const v=norm(sub(P[s.b],P[s.a])); return [dot(v,X),dot(v,up),dot(v,Z)]; });
+  const yaw = Math.atan2(P[12][2]-P[11][2], P[12][0]-P[11][0])*180/Math.PI;
+  const vis = SEGS.map(sg=> lm ? Math.min(lm[sg.a].visibility ?? 1, lm[sg.b].visibility ?? 1) : 1);
+  return { vecs, yaw, vis, pts: lm ? pts2d(lm) : null };
+}
+function yawDiff(a,b){ let d=Math.abs(a-b)%360; return d>180?360-d:d; }
+function avgFeatures(list){
+  const vecs = SEGS.map((_,i)=>norm(list.reduce((s,f)=>[s[0]+f.vecs[i][0],s[1]+f.vecs[i][1],s[2]+f.vecs[i][2]],[0,0,0])));
+  let sx=0, sy=0; list.forEach(f=>{ sx+=Math.cos(f.yaw*Math.PI/180); sy+=Math.sin(f.yaw*Math.PI/180); });
+  const vis = SEGS.map((_,i)=> list.reduce((s,f)=>s+(f.vis?f.vis[i]:1),0)/list.length);
+  const dc={}; list.forEach(f=>{ if(f.dir) dc[f.dir]=(dc[f.dir]||0)+1; });
+  const dir = Object.keys(dc).sort((a,b)=>dc[b]-dc[a])[0] || null;
+  let pts=null;
+  const withPts=list.filter(f=>f.pts);
+  if(withPts.length){ pts={}; PT_IDS.forEach(i=>{ pts[i]=[withPts.reduce((s,f)=>s+f.pts[i][0],0)/withPts.length, withPts.reduce((s,f)=>s+f.pts[i][1],0)/withPts.length]; }); }
+  return { vecs, yaw: Math.atan2(sy,sx)*180/Math.PI, vis, dir, pts };
+}
+const VIS_MIN = 0.3;    // 이보다 낮으면 '가려진 부위'로 보고 판정에서 뺌
+function compare(f, ref){
+  const refSees = i => !(isBasic() && i>=4) && (!ref.vis || ref.vis[i]>=VIS_MIN);   // 기본동작은 팔(0~3번)만
+  const curSees = i => !f.vis || f.vis[i]>=VIS_MIN;
+  const used = SEGS.map((_,i)=> refSees(i));
+  // 정답에선 보이던 부위가 지금 안 보이면 = 다른 쪽 팔/다리를 쓰고 있다는 뜻 → 크게 틀린 것으로 침
+  const diffs = f.vecs.map((v,i)=> !refSees(i) ? null : (curSees(i) ? angBetween(v, ref.vecs[i]) : 60));
+  let worst=-1, sum=0, n=0;
+  diffs.forEach((d,i)=>{ if(d===null) return; sum+=d; n++; if(worst<0 || d>diffs[worst]) worst=i; });
+  return { diffs, used, n, worst, worstDiff: worst<0?999:diffs[worst], mean: n?sum/n:999, yd:yawDiff(f.yaw, ref.yaw) };
+}
+
+// ---------- 화면 ----------
+function renderSteps(){
+  const ol=$('steps'); ol.innerHTML='';
+  data.steps.forEach((s,i)=>{
+    const li=document.createElement('li');
+    li.textContent=s.name;
+    const t=document.createElement('span');
+    t.className='tag'+(refOf(s)?' ok':'');
+    t.textContent = s.key!==undefined ? (refOf(s) ? (s.mirror ? '정답 있음(①을 좌우 반전)' : '정답 있음') : (s.mirror ? '①을 녹화하면 자동' : '정답 없음'))
+                  : (validRef(s.ref) ? '정답 있음' : (refOf(s) ? '정답 있음(같은 이름)' : '정답 없음'));
+    li.appendChild(t);
+    if(i===cur) li.classList.add('cur');
+    if(passed.has(i)) li.classList.add('done');
+    li.onclick=()=>{ cur=i; holdStart=null; renderSteps(); updateTitle(''); };
+    ol.appendChild(li);
+  });
+  const c = ol.children[cur]; if(c) c.scrollIntoView({block:'nearest'});
+}
+function updateTitle(msg){
+  const s=data.steps[cur];
+  $('stepName').textContent = s ? s.name : '';
+  if(msg!==undefined) $('feedback').textContent = msg;
+}
+function setBar(p, color){ $('bar').style.width=(Math.max(0,Math.min(1,p))*100)+'%'; $('bar').style.background=color; }
+
+function setMode(m){
+  mode=m;
+  $('modePractice').classList.toggle('on', m==='practice');
+  $('modeRecord').classList.toggle('on', m==='record');
+  $('recordCard').style.display = m==='record' ? '' : 'none';
+  ['addStepBtn','renameBtn','delStepBtn'].forEach(id=>$(id).style.display = isBasic() ? 'none' : '');
+  $('fCapture').style.display = m==='record' ? 'inline-block' : 'none';
+  holdStart=null; updateTitle(m==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '');
+}
+
+// ---------- 카메라 / 모델 ----------
+async function openCamera(){
+  if(video && video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); }
+  if(!video){ video=document.createElement('video'); video.playsInline=true; video.muted=true; video.setAttribute('playsinline',''); }
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:facing, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+  await video.play();
+  cv.width=video.videoWidth; cv.height=video.videoHeight;
+  smooth=null;
+}
+async function loadModel(){
+  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  const url = MODEL_URL[$('model').value] || MODEL_URL.full;
+  const opts = d=>({ baseOptions:{ modelAssetPath:url, delegate:d }, runningMode:'VIDEO', numPoses:1,
+                     minPoseDetectionConfidence:0.6, minPosePresenceConfidence:0.6, minTrackingConfidence:0.6 });
+  if(landmarker){ try{ landmarker.close(); }catch(e){} }
+  try { landmarker = await PoseLandmarker.createFromOptions(vision, opts('GPU')); }
+  catch(e){ landmarker = await PoseLandmarker.createFromOptions(vision, opts('CPU')); }
+}
+
+async function start(){
+  $('startCam').disabled=true;
+  updateTitle('카메라 켜는 중…');
+  let stage='카메라';
+  try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error('이 화면에서는 카메라를 쓸 수 없습니다'),{name:'NoMediaDevices'});
+    await openCamera();
+    stage='AI 모델';
+    updateTitle('AI 모델 불러오는 중… (처음엔 10~20초 걸립니다)');
+    await loadModel();
+    drawer = new DrawingUtils(ctx);
+    if(!running){ running=true; requestAnimationFrame(loop); }
+    updateTitle(mode==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '');
+    $('startCam').disabled=false; $('startCam').textContent='다시 시작';
+  }catch(e){
+    console.error(e);
+    const n=e && e.name;
+    let why;
+    if(n==='NoMediaDevices') why='앱 미리보기 화면에서는 카메라가 막힙니다. 인터넷 주소(https)로 여세요.';
+    else if(n==='NotAllowedError'||n==='SecurityError') why='카메라 권한이 거부됐습니다. 주소창 왼쪽 아이콘 → 카메라 [허용] 후 새로고침.';
+    else if(n==='NotFoundError'||n==='OverconstrainedError') why='카메라를 찾지 못했습니다.';
+    else if(n==='NotReadableError'||n==='AbortError') why='다른 앱이 카메라를 쓰고 있습니다. 끄고 다시 시도하세요.';
+    else if(stage==='AI 모델') why='AI 모델을 받지 못했습니다. 인터넷 연결을 확인하세요.';
+    else why='알 수 없는 오류';
+    updateTitle(stage+' 단계 실패');
+    $('feedback').textContent = why+'  ['+(n||'')+': '+(e.message||e)+']';
+    $('startCam').disabled=false;
+  }
+}
+
+function loop(){
+  const now=performance.now();
+  if(landmarker && video && video.readyState>=2 && now>lastTs){
+    lastTs=now;
+    let res=null;
+    try{ res = landmarker.detectForVideo(video, now); }catch(e){}
+    const mirror=$('mirror').checked;
+    ctx.save();
+    if(mirror){ ctx.translate(cv.width,0); ctx.scale(-1,1); }
+    ctx.drawImage(video,0,0,cv.width,cv.height);
+    if(res && res.landmarks && res.landmarks[0]){
+      drawer.drawConnectors(res.landmarks[0], PoseLandmarker.POSE_CONNECTIONS, { color:'#ffd400', lineWidth:4 });
+      drawer.drawLandmarks(res.landmarks[0], { color:'#fff', radius:3 });
+    }
+    ctx.restore();
+    if(res) handle(res, now);
+    if(res && res.landmarks && res.landmarks[0]) drawShadow(res.landmarks[0]);
+  }
+  requestAnimationFrame(loop);
+}
+
+function handle(res, now){
+  const lm = res.landmarks && res.landmarks[0];
+  const world = res.worldLandmarks && res.worldLandmarks[0];
+  if(!lm || !world){ $('judgePanel').style.display='none'; smooth=null; holdStart=null; setBar(0,'#e33'); $('feedback').textContent='사람이 안 보입니다'; return; }
+  // 화면 안에 있는지는 좌표로 확인 (AI의 '보임 점수'는 어두운 바지·바닥에서 낮게 나와 믿기 어려움)
+  const inFrame = (isBasic() ? [11,12,23,24] : [11,12,23,24,27,28]).every(i => lm[i].x>-0.02 && lm[i].x<1.02 && lm[i].y>-0.02 && lm[i].y<1.03);
+  const visible = inFrame && [11,12,23,24].every(i => (lm[i].visibility ?? 1) > 0.3);
+  if(!visible){ holdStart=null; setBar(0,'#e33'); $('feedback').textContent='머리부터 발끝까지 화면에 들어오게 뒤로 가 주세요'; return; }
+  const f = features(smoothWorld(world), lm);
+  const dir = estimateDirection(lm);
+  f.dir = dir.code;
+  const dirLine = '▶ 지금 방향: '+dir.label+'  (코 '+(dir.nose>=0?'+':'')+dir.nose.toFixed(2)+')';
+
+  // ----- 정답 녹화 -----
+  if(capturing){
+    if(now>=capturing.startAt){
+      capturing.samples.push(f);
+      $('feedback').textContent='측정 중… 움직이지 마세요!';
+      if(now>=capturing.startAt+1500){
+        const step=data.steps[cur];
+        const samples = capturing.samples;
+        const ref = avgFeatures(samples);
+        capturing=null; $('countdown').textContent='';
+        // 부위별 흔들림: 측정 중 평균 방향에서 얼마나 벗어났나 (보인 프레임만)
+        const excluded=[]; let maxShake=0;
+        SEGS.forEach((sg,i)=>{
+          let spread=0, seen=0;
+          samples.forEach(f=>{ if(!f.vis || f.vis[i]>=VIS_MIN){ seen++; spread=Math.max(spread, angBetween(f.vecs[i], ref.vecs[i])); } });
+          const stable = seen >= samples.length*0.7 && spread <= 20;
+          if(!stable){ ref.vis[i]=0; excluded.push(sg.name.replace('(주먹 방향)','')); }
+          else maxShake=Math.max(maxShake, spread);
+        });
+        if(isBasic()){ for(let i=4;i<SEGS.length;i++){ ref.vis[i]=0; } }
+        const armEx = excluded.filter(n=>!isBasic() || /팔/.test(n));
+        excluded.length=0; excluded.push(...armEx);
+        const good = (isBasic()?4:SEGS.length) - excluded.length;
+        if(samples.length < 5){
+          $('feedback').textContent='❌ 측정 중 사람을 놓쳤습니다. 전신이 보이게 서서 다시 해주세요';
+        }else if(good < MIN_PARTS()){
+          $('feedback').textContent='❌ 제대로 보이는 부위가 '+good+'개뿐입니다 (가려지거나 흔들림: '+excluded.join(', ')+'). 카메라 위치를 바꿔보세요';
+        }else{
+          if(step.key!==undefined) data.refs[step.key] = step.mirror ? mirrorRef(ref) : ref;
+          else { step.ref = ref; data.steps.forEach(o=>{ if(o.name===step.name) o.ref=ref; }); }
+          save(); renderSteps();
+          let warn='';
+          data.steps.forEach((o,i)=>{ const oR=refOf(o); if(i!==cur && o.name!==step.name && !(o.key!==undefined && o.key===step.key) && oR){ const c=compare(ref,oR); if(c.n>=MIN_PARTS() && c.worstDiff<25) warn=' ⚠ "'+o.name+'"과 거의 같은 자세입니다'; } });
+          $('feedback').textContent='✅ 저장 완료 (판정 부위 '+good+'개'+(excluded.length?', 제외: '+excluded.join(', '):'')+')'+warn;
+        }
+      }
+    }
+    return;
+  }
+  if(mode!=='practice'){
+    if($('debug').checked){
+      $('judgePanel').textContent = dirLine+'\n[녹화 모드] 부위별 보임 점수 (0~1)\n' + SEGS.map((sg,i)=>{ const v=f.vis[i]; return (v>=VIS_MIN?'✓ ':'– ')+sg.name.replace('(주먹 방향)','')+' '+v.toFixed(2); }).join('\n');
+      $('judgePanel').style.display='block';
+    } else $('judgePanel').style.display='none';
+    return;
+  }
+
+  const step=data.steps[cur];
+  if(!step) return;
+  const R = refOf(step);
+  if(!R){ $('feedback').textContent='이 동작은 정답이 없습니다 (정답 녹화 모드에서 저장)'; setBar(0,'#e33'); return; }
+
+  const tol=+$('tol').value, holdSec=+$('hold').value, useYaw=$('useYaw').checked;
+  const c = compare(f, R);
+
+  // 다른 동작이 더 비슷하면 통과 안 시킴
+  let other=null, otherScore=Infinity, otherC=null;
+  data.steps.forEach((o,i)=>{
+    const oR = refOf(o);
+    if(i===cur || !oR) return;
+    if(!isBasic() && oR.dir && oR.dir!==f.dir) return;   // 다른 방향 동작과는 비교 안 함
+    const oc=compare(f,oR);
+    // 같은 기술이 반복되는 동작(이름에서 번호 뺀 부분이 같음)은 '틀림'으로 보지 않음
+    if(o.name.replace(/^[0-9]+\.\s*/,'')===step.name.replace(/^[0-9]+\.\s*/,'')) return;
+    if(isBasic() && !(o.key===step.key && o.mirror!==step.mirror)) return;   // 기본동작: 좌우 반대 손(손바뀜)만 비교
+    if(isBasic() && compare(R,oR).mean < 15) return;                          // 좌우 대칭 자세(준비 등)는 손바뀜 판정 안 함
+    if(oc.n < MIN_PARTS()) return;
+    if(oc.mean<otherScore){ otherScore=oc.mean; other=o; otherC=oc; }
+  });
+  const isClosest = !other || c.mean <= otherScore;
+
+  const okLimbs = c.n >= MIN_PARTS() && c.worstDiff <= tol;
+  const okYaw = !useYaw || c.yd <= 40;
+  const okDir = isBasic() || !$('useDir').checked || !R.dir || R.dir===f.dir;
+  const closeness = Math.max(0, 1 - c.worstDiff/(tol*2));
+  if($('debug').checked){
+    const L=SEGS.map((sg,i)=>{ const nm=sg.name.replace('(주먹 방향)',''); const v=' (보임 '+f.vis[i].toFixed(2)+')'; if(c.diffs[i]===null) return '– '+nm+' 제외'+v; const d=Math.round(c.diffs[i]); return (d>tol?'✗ ':'✓ ')+nm+' '+d+'°'+v; });
+    L.push((okYaw?'✓ ':'✗ ')+'몸 방향 '+Math.round(c.yd)+'°'+(useYaw?'':' (판정 안 함)'));
+    L.push((isClosest?'✓ ':'✗ ')+'지금 동작 평균 '+Math.round(c.mean)+'°'+(other?' / 가장 비슷한 다른 동작 "'+other.name+'" '+Math.round(otherScore)+'°':''));
+    $('judgePanel').textContent=dirLine+'\n'+L.join('\n'); $('judgePanel').style.display='block';
+  } else $('judgePanel').style.display='none';
+
+  shadowOk = okDir && okLimbs && okYaw && isClosest;
+  if(okDir && okLimbs && okYaw && isClosest){
+    wrongStart=null;
+    if(holdStart===null) holdStart=now;
+    const p=(now-holdStart)/(holdSec*1000);
+    setBar(p,'#4c4');
+    $('feedback').textContent='좋아요! 그대로 유지';
+    if(p>=1){
+      passed.add(cur); holdStart=null;
+      if(cur < data.steps.length-1){ cur++; renderSteps(); updateTitle('👍 통과! 다음 동작'); }
+      else {
+        renderSteps();
+        if(!mistakes.length) updateTitle('🎉 끝까지 완료! 실수 없이 성공!');
+        else updateTitle('🎉 완료! 실수 '+mistakes.length+'번: '+mistakes.map(m=>m.step.split('.')[0]+'번('+m.did+'로 착각)').join(', '));
+      }
+    }
+  }else{
+    holdStart=null;
+    // 다른 동작을 또렷하게 하고 있으면 = 순서 착각(손바뀜·동작바뀜)
+    const doingOther = okDir && other && !isClosest && otherC.n>=MIN_PARTS() && otherC.worstDiff<=tol;
+    if(doingOther){
+      if(wrongStart===null) wrongStart=now;
+      if(now-wrongStart >= holdSec*1500){
+        if(!mistakeLogged.has(cur)){ mistakeLogged.add(cur); mistakes.push({ step:step.name, did:other.name }); }
+        setBar(1,'#e33');
+        $('feedback').textContent='❌ 틀렸어요! 그건 "'+other.name+'" 동작이에요. 손과 발을 다시 생각해 보세요';
+        return;
+      }
+    } else wrongStart=null;
+    setBar(closeness, closeness>0.6?'#fa3':'#e33');
+    let hint;
+    if(!okDir) hint='🔄 방향이 틀렸어요! '+DIR_NAME[R.dir]+'(으)로 서야 해요';
+    else if(c.n<MIN_PARTS()) hint= isBasic() ? '양팔이 화면에 보이게 서 주세요' : '팔다리가 너무 많이 가려졌어요. 카메라 위치를 바꿔보세요';
+    else if(!okLimbs) hint=SEGS[c.worst].name+' 확인 ('+Math.round(c.worstDiff)+'° 차이)';
+    else if(!okYaw) hint='몸 방향을 확인하세요';
+    else hint='"'+other.name+'" 동작과 더 비슷해요';
+    $('feedback').textContent=hint;
+  }
+}
+
+// ---------- 방향 추정 (화면 2D 좌표만 사용: AI의 좌/우 이름표에 의존하지 않음) ----------
+// 어깨비 = 화면상 어깨 너비 ÷ 몸통 길이 → 정면/뒤는 넓고, 옆으로 서면 좁음
+// 코 = 코가 어깨 가운데에서 어느 쪽으로 치우쳤나 → 옆으로 섰을 때 어느 쪽을 보는지
+// 얼굴 = 코·눈의 보임 점수 → 정면과 뒤를 구분
+const DIR_NAME = { F:'정면(카메라 쪽)', L:'왼쪽으로 돈 방향', R:'오른쪽으로 돈 방향' };
+// 실측 결과: 어깨 너비는 지르기 때 어깨가 열려서 믿기 어렵고, 코 위치가 가장 또렷했음
+// (정면 ≈ 0.00, 옆으로 서면 ±0.2 이상)
+const dirHist = []; let lastRawDir = 'F';
+function estimateDirection(lm){
+  const W = cv.width||1, H = cv.height||1;
+  const px = i => [lm[i].x*W, lm[i].y*H];
+  const [ax,ay]=px(11), [bx,by]=px(12), [cx,cy]=px(23), [dx,dy]=px(24), [nx]=px(0);
+  const msx=(ax+bx)/2, msy=(ay+by)/2, mhx=(cx+dx)/2, mhy=(cy+dy)/2;
+  const torso = Math.hypot(msx-mhx, msy-mhy) || 1;
+  const nose = (nx-msx)/torso;
+  let raw;
+  if(nose > 0.12) raw='L';            // 카메라를 보던 사람이 자기 왼쪽으로 돈 상태
+  else if(nose < -0.12) raw='R';
+  else if(Math.abs(nose) < 0.08) raw='F';
+  else raw=lastRawDir;                // 애매한 구간은 직전 값 유지
+  lastRawDir=raw;
+  dirHist.push(raw); if(dirHist.length>10) dirHist.shift();
+  const cnt={}; dirHist.forEach(x=>cnt[x]=(cnt[x]||0)+1);
+  const code = Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
+  return { code, label: DIR_NAME[code], nose };
+}
+
+// ---------- 쉐도우: 지금 해야 할 동작을 아이 몸 위에 겹쳐 그림 ----------
+let shadowOk=false;
+function drawShadow(lm){
+  if(mode!=='practice' || !$('shadow').checked) return;
+  const st=data.steps[cur]; if(!st) return;
+  const r=refOf(st); if(!r || !r.pts) return;
+  const a=bodyAnchor(lm);
+  const P=i=>{ const q=r.pts[i]; return q ? [a.mx+q[0]*a.t, a.my+q[1]*a.t] : null; };
+  const lines = isBasic() ? [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]]
+                          : [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]];
+  ctx.save();
+  if($('mirror').checked){ ctx.translate(cv.width,0); ctx.scale(-1,1); }
+  ctx.lineCap='round';
+  ctx.strokeStyle = shadowOk ? 'rgba(80,230,120,0.75)' : 'rgba(120,200,255,0.7)';
+  ctx.lineWidth = Math.max(10, a.t*0.09);
+  lines.forEach(([i,j])=>{ const p=P(i), q=P(j); if(!p||!q) return; ctx.beginPath(); ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]); ctx.stroke(); });
+  [15,16].forEach(i=>{ const p=P(i); if(!p) return; ctx.beginPath(); ctx.arc(p[0],p[1],Math.max(10,a.t*0.08),0,Math.PI*2); ctx.fillStyle=ctx.strokeStyle; ctx.fill(); });
+  ctx.restore();
+}
+
+// ---------- 녹화 ----------
+function capture(){
+  if(!running || !landmarker){ alert('먼저 카메라를 켜주세요'); return; }
+  if(capturing) return;
+  const startAt = performance.now()+3000;
+  capturing={ startAt, samples:[] };
+  const tick=()=>{
+    if(!capturing){ $('countdown').textContent=''; return; }
+    const left=Math.ceil((startAt-performance.now())/1000);
+    $('countdown').textContent = left>0 ? left : '';
+    if(left>0) setTimeout(tick,100);
+  };
+  tick();
+}
+
+// ---------- 버튼 ----------
+$('startCam').onclick=start;
+$('flipCam').onclick=async()=>{
+  facing = facing==='user' ? 'environment' : 'user';
+  $('mirror').checked = facing==='user';
+  if(running){ try{ await openCamera(); }catch(e){ $('feedback').textContent='카메라 전환 실패: '+(e.message||e); } }
+};
+$('modePractice').onclick=()=>setMode('practice');
+$('kindSel').value = kind;
+$('kindSel').onchange=()=>{ save(); loadKind($('kindSel').value); setMode(mode); cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear(); renderSteps(); updateTitle(''); };
+$('fPrev').onclick=()=>$('prevBtn').click();
+$('fNext').onclick=()=>$('nextBtn').click();
+$('fReset').onclick=()=>$('resetBtn').click();
+$('fCapture').onclick=capture;
+$('sheetBtn').onclick=()=>$('sheet').classList.add('open');
+$('sheetClose').onclick=()=>$('sheet').classList.remove('open');
+$('modeRecord').onclick=()=>setMode('record');
+// 기본동작 녹화 때는 ②(자동 반전)를 건너뜀
+const skipStep = i => mode==='record' && isBasic() && data.steps[i] && data.steps[i].mirror;
+$('prevBtn').onclick=()=>{ let i=cur-1; while(i>0 && skipStep(i)) i--; if(i>=0){cur=i; holdStart=null; renderSteps(); updateTitle('');} };
+$('nextBtn').onclick=()=>{ let i=cur+1; while(i<data.steps.length-1 && skipStep(i)) i++; if(i<=data.steps.length-1 && !skipStep(i)){cur=i; holdStart=null; renderSteps(); updateTitle('');} };
+$('resetBtn').onclick=()=>{ cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear(); renderSteps(); updateTitle(''); };
+$('captureBtn').onclick=capture;
+$('clearBtn').onclick=()=>{ const st=data.steps[cur]; if(st.key!==undefined) delete data.refs[st.key]; else st.ref=null; save(); renderSteps(); };
+$('addStepBtn').onclick=()=>{ const n=prompt('동작 이름 (예: 5. 왼 앞굽이 아래막기)'); if(n){ data.steps.splice(cur+1,0,{name:n,ref:null}); cur++; save(); renderSteps(); updateTitle(''); } };
+$('renameBtn').onclick=()=>{ const s=data.steps[cur]; const n=prompt('새 이름', s.name); if(n){ s.name=n; save(); renderSteps(); updateTitle(); } };
+$('delStepBtn').onclick=()=>{ if(data.steps.length<=1) return; if(confirm('"'+data.steps[cur].name+'" 삭제할까요?')){ data.steps.splice(cur,1); cur=Math.min(cur,data.steps.length-1); save(); renderSteps(); updateTitle(''); } };
+$('fullBtn').onclick=()=>{ const el=$('stage'); (document.fullscreenElement? document.exitFullscreen() : el.requestFullscreen?.()); };
+$('exportBtn').onclick=()=>{
+  const blob=new Blob([JSON.stringify(data,null,1)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=(data.title||'poomsae')+'_정답.json'; a.click();
+};
+$('importBtn').onclick=()=>$('importFile').click();
+$('importFile').onchange=async e=>{
+  const file=e.target.files[0]; if(!file) return;
+  try{ const d=JSON.parse(await file.text());
+       if(d.kind==='basic'){ if(!isBasic()) throw 0; data={ title:d.title||'기본동작', kind:'basic', moves:d.moves||BASIC_MOVES.slice(), refs:d.refs||{} }; data.steps=buildBasicSteps(data.moves); cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); return; }
+       if(isBasic() || !Array.isArray(d.steps)) throw 0;
+       d.steps.forEach(s=>{ if(!validRef(s.ref)) s.ref=null; });
+       data=d; cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); }
+  catch(err){ alert('파일 형식이 맞지 않습니다'); }
+};
+const syncLabels=()=>{ $('tolV').textContent=$('tol').value; $('holdV').textContent=$('hold').value; };
+$('tol').oninput=syncLabels; $('hold').oninput=syncLabels; syncLabels();
+
+setMode('practice');
+renderSteps(); updateTitle('');
+$('stepName').textContent='카메라를 켜주세요';
+</script>
+</body>
+</html>
