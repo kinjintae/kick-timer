@@ -153,6 +153,9 @@
         <button id="importBtn">불러오기</button>
         <input type="file" id="importFile" accept=".json" style="display:none">
       </div>
+      <div class="row" style="margin-top:6px">
+        <button id="serverBtn">☁ 공용 정답 받기</button>
+      </div>
       <small>정답 자세는 이 브라우저에 자동 저장됩니다. 다른 기기로 옮길 때는 파일로 내보내세요.</small>
     </div>
   </aside>
@@ -763,7 +766,7 @@ $('flipCam').onclick=async()=>{
 };
 $('modePractice').onclick=()=>setMode('practice');
 $('kindSel').value = kind;
-$('kindSel').onchange=()=>{ save(); loadKind($('kindSel').value); setMode(mode); cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear(); renderSteps(); updateTitle(''); };
+$('kindSel').onchange=()=>{ save(); loadKind($('kindSel').value); loadShared(false); setMode(mode); cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear(); renderSteps(); updateTitle(''); };
 $('fPrev').onclick=()=>$('prevBtn').click();
 $('fNext').onclick=()=>$('nextBtn').click();
 $('fReset').onclick=()=>$('resetBtn').click();
@@ -785,8 +788,9 @@ $('renameBtn').onclick=()=>{ const s=data.steps[cur]; const n=prompt('새 이름
 $('delStepBtn').onclick=()=>{ if(data.steps.length<=1) return; if(confirm('"'+data.steps[cur].name+'" 삭제할까요?')){ data.steps.splice(cur,1); cur=Math.min(cur,data.steps.length-1); save(); renderSteps(); updateTitle(''); } };
 $('fullBtn').onclick=()=>{ const el=$('stage'); (document.fullscreenElement? document.exitFullscreen() : el.requestFullscreen?.()); };
 $('exportBtn').onclick=()=>{
-  const blob=new Blob([JSON.stringify(data,null,1)],{type:'application/json'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=(data.title||'poomsae')+'_정답.json'; a.click();
+  const out = isBasic() ? { title:data.title, kind:'basic', moves:data.moves, refs:data.refs, voice:data.voice||{} } : data;
+  const blob=new Blob([JSON.stringify(out)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download= isBasic() ? 'basic-data.json' : 'poomsae-data.json'; a.click();
 };
 $('importBtn').onclick=()=>$('importFile').click();
 $('importFile').onchange=async e=>{
@@ -802,6 +806,27 @@ const syncLabels=()=>{ $('tolV').textContent=$('tol').value; $('holdV').textCont
 $('tol').oninput=()=>{ $('level').value=''; syncLabels(); };
 $('level').onchange=()=>{ if($('level').value){ $('tol').value=$('level').value; syncLabels(); } try{ localStorage.setItem('level',$('level').value); }catch(e){} };
 try{ const lv=localStorage.getItem('level'); if(lv){ $('level').value=lv; $('tol').value=lv; } }catch(e){} $('hold').oninput=syncLabels; syncLabels();
+
+// ---------- 공용 정답: GitHub에 올린 basic-data.json을 자동으로 받아옴 ----------
+async function loadShared(force){
+  const file = isBasic() ? 'basic-data.json' : 'poomsae-data.json';
+  let hasLocal=false;
+  try{ hasLocal = !!localStorage.getItem(KINDS[kind].key); }catch(e){}
+  if(hasLocal && !force) return;
+  try{
+    const r = await fetch(file+'?t='+Date.now(), { cache:'no-store' });
+    if(!r.ok){ if(force) $('feedback').textContent='공용 정답 파일('+file+')이 아직 없습니다'; return; }
+    const d = await r.json();
+    if(isBasic() && d.kind==='basic'){
+      data={ title:d.title||'기본동작', kind:'basic', moves:BASIC_MOVES.slice(), refs:d.refs||{}, voice:d.voice||{} };
+      data.steps=buildBasicSteps();
+    } else if(!isBasic() && Array.isArray(d.steps)) data=d;
+    else return;
+    save(); cur=0; passed.clear(); renderSteps(); updateTitle('☁ 공용 정답을 받았습니다');
+  }catch(e){ if(force) $('feedback').textContent='공용 정답을 받지 못했습니다: '+(e.message||e); }
+}
+$('serverBtn').onclick=()=>{ if(confirm('이 폰에 저장된 정답·구령을 공용 정답으로 바꿀까요?')) loadShared(true); };
+loadShared(false);
 
 setMode('practice');
 renderSteps(); updateTitle('');
