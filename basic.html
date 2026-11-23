@@ -39,6 +39,8 @@
   #floatBar button { background:#000a; border-color:#666; padding:10px 11px; font-size:15px; white-space:nowrap; }
   #floatBar #fCapture { background:#e33; border-color:#e33; font-weight:700; display:none; }
   #floatBar #fVoice { background:#36c; border-color:#36c; font-weight:700; display:none; }
+  #floatBar #fStart { background:#2a7; border-color:#2a7; font-weight:700; }
+  #floatBar #fStop { background:#555; border-color:#777; }
   #floatBar #fAuto { background:#2a7; border-color:#2a7; font-weight:700; display:none; }
   #sheetBtn, #sheetClose { display:none; }
   @media (max-width:900px){
@@ -81,6 +83,8 @@
     <div id="floatBar">
       <button id="fPrev">◀</button>
       <button id="fReset">처음</button>
+      <button id="fStart">▶ 시작</button>
+      <button id="fStop">■ 정지</button>
       <button id="fCapture">● 저장</button>
       <button id="fVoice">🎤</button>
       <button id="fAuto">▶ 연속</button>
@@ -286,6 +290,7 @@ let holdStart = null;
 let bucket = 0, bucketStep = -1, lastJudgeT = 0;
 let stepStartT = 0, stepStartStep = -1, sessionStart = 0, skipped = [], stepLog = [];
 function finishReport(now){
+  setTimeout(()=>setPractice('idle'),0);
   const total = Math.round((now-sessionStart)/1000);
   const slow = stepLog.filter(x=>!x.skip).sort((a,b)=>b.ms-a.ms).slice(0,3).map(x=>x.name+' '+(x.ms/1000).toFixed(1)+'초');
   let t = '🎉 완료! '+total+'초';
@@ -412,11 +417,12 @@ function setMode(m){
   $('rangeBox').style.display = isBasic() ? '' : 'none';
   $('fCapture').style.display = m==='record' ? 'inline-block' : 'none';
   $('fVoice').style.display = (m==='record' && isBasic()) ? 'inline-block' : 'none';
-  $('fReset').style.display = m==='record' ? 'none' : '';
+  $('fReset').style.display = 'none';
+  if(typeof setPractice==='function') setPractice('idle');
   $('fAuto').style.display = (m==='record' && isBasic()) ? 'inline-block' : 'none';
   if(m!=='record' && autoRec) autoStop();
   lastCued=-1;
-  holdStart=null; updateTitle(m==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '');
+  holdStart=null; updateTitle(m==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '▶ 시작을 누르세요');
 }
 
 // ---------- 카메라 / 모델 ----------
@@ -450,7 +456,7 @@ async function start(){
     await loadModel();
     drawer = new DrawingUtils(ctx);
     if(!running){ running=true; requestAnimationFrame(loop); }
-    updateTitle(mode==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '');
+    updateTitle(mode==='record' ? '동작을 고르고 [자세 저장]을 누르세요' : '▶ 시작을 누르세요');
     $('startCam').disabled=false; $('startCam').textContent='다시 시작';
   }catch(e){
     console.error(e);
@@ -481,8 +487,50 @@ function playCue(st){
     u.lang='ko-KR'; u.rate=1.0; u.pitch=1.0; speechSynthesis.speak(u);
   }
 }
+// ---------- 연습 시작 / 일시정지 / 정지 ----------
+let practiceState='idle', countdownEnd=0, pauseAt=0;
+function resetSession(){
+  cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear();
+  skipped=[]; stepLog=[]; sessionStart=0; stepStartStep=-1; bucket=0; bucketStep=-1; lastCued=-1;
+}
+function setPractice(st){
+  practiceState=st;
+  const inPractice = mode==='practice';
+  $('fStart').style.display = inPractice ? 'inline-block' : 'none';
+  $('fStop').style.display = (inPractice && st!=='idle') ? 'inline-block' : 'none';
+  $('fStart').textContent = st==='running' ? '⏸ 일시정지' : st==='paused' ? '▶ 계속' : st==='countdown' ? '…' : '▶ 시작';
+  if(st==='idle' && inPractice){ setBar(0,'#333'); $('countdown').textContent=''; }
+  if(st==='paused'){ updateTitle('⏸ 일시정지'); $('feedback').textContent='[▶ 계속]을 누르면 이어서 합니다'; }
+}
+function practiceStartPause(){
+  if(!running || !landmarker){ alert('먼저 카메라를 켜주세요'); return; }
+  unlockAudio();
+  const now=performance.now();
+  if(practiceState==='idle'){
+    resetSession(); renderSteps();
+    countdownEnd=now+3000; setPractice('countdown'); updateTitle('준비하세요!'); $('feedback').textContent='';
+  }else if(practiceState==='running'){
+    pauseAt=now; setPractice('paused');
+    try{ if(curAudio) curAudio.pause(); if('speechSynthesis' in window) speechSynthesis.cancel(); }catch(e){}
+  }else if(practiceState==='paused'){
+    const gap=now-pauseAt; stepStartT+=gap; if(sessionStart) sessionStart+=gap; cueAt+=gap; lastJudgeT=now;
+    setPractice('running'); updateTitle(''); lastCued=-1;
+  }
+}
+function practiceStop(){
+  try{ if(curAudio) curAudio.pause(); if('speechSynthesis' in window) speechSynthesis.cancel(); }catch(e){}
+  resetSession(); renderSteps(); setPractice('idle'); updateTitle('▶ 시작을 누르세요');
+}
+function practiceTick(now){
+  if(mode!=='practice' || practiceState!=='countdown') return;
+  const left=Math.ceil((countdownEnd-now)/1000);
+  $('countdown').textContent = left>0 ? left : '';
+  if(left<=0){ setPractice('running'); updateTitle(''); lastCued=-1; stepStartStep=-1; }
+}
+
 function cueTick(now){
-  if(mode!=='practice' || !running) return;
+  practiceTick(now);
+  if(mode!=='practice' || !running || practiceState!=='running') return;
   const st=data.steps[cur]; if(!st) return;
   if(cur!==lastCued){
     if(now-passAt < 500) return;            // 통과 직후 잠깐 쉬고 다음 구령
@@ -613,6 +661,7 @@ function handle(res, now){
     return;
   }
 
+  if(practiceState!=='running'){ shadowOk=false; setBar(0,'#333'); return; }
   const step=data.steps[cur];
   if(!step) return;
   const R = refOf(step);
@@ -768,7 +817,7 @@ function posCheck(f, r){
   return { worst, name };
 }
 function drawShadow(lm){
-  if(mode!=='practice' || !$('shadow').checked) return;
+  if(mode!=='practice' || practiceState!=='running' || !$('shadow').checked) return;
   const st=data.steps[cur]; if(!st) return;
   const r=refOf(st); if(!r || !r.pts) return;
   const a=bodyAnchor(lm);
@@ -861,6 +910,8 @@ $('kindSel').onchange=()=>{ save(); loadKind($('kindSel').value); loadShared(fal
 $('fPrev').onclick=()=>$('prevBtn').click();
 $('fNext').onclick=()=>$('nextBtn').click();
 $('fReset').onclick=()=>$('resetBtn').click();
+$('fStart').onclick=practiceStartPause;
+$('fStop').onclick=practiceStop;
 $('fCapture').onclick=capture;
 $('fVoice').onclick=recordVoice;
 $('fAuto').onclick=$('autoBtn').onclick=()=>{ unlockAudio(); autoRec ? autoStop('연속 녹화 멈춤') : autoStart(); };
