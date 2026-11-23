@@ -412,15 +412,21 @@ function avgFeatures(list){
   return { vecs, yaw: Math.atan2(sy,sx)*180/Math.PI, vis, dir, pts, armRatio, dcue };
 }
 const VIS_MIN = 0.3;    // 이보다 낮으면 '가려진 부위'로 보고 판정에서 뺌
+// 정답에서 카메라 쪽(앞뒤)으로 뻗은 부위는 카메라 한 대로 방향을 믿을 수 없음
+// (실측: 제비품 목치기·손날 목치기·지르기처럼 팔이 카메라 쪽을 향한 동작이 모든 폰에서 계속 막힘)
+// → 그 부위는 각도 판정을 빼고, 화면상 손 위치(동그라미)로만 판정
+const DEPTH_SKIP = 0.75;
 function compare(f, ref){
-  const refSees = i => i<4 && (!ref.vis || ref.vis[i]>=VIS_MIN);   // 팔(0~3번)만 판정   // 기본동작은 팔(0~3번)만
+  const refSees = i => i<4 && (!ref.vis || ref.vis[i]>=VIS_MIN);   // 팔(0~3번)만 판정
   const curSees = i => !f.vis || f.vis[i]>=VIS_MIN;
+  const deep = i => Math.abs(ref.vecs[i][2]) > DEPTH_SKIP;
   const used = SEGS.map((_,i)=> refSees(i));
-  // 정답에선 보이던 부위가 지금 안 보이면 = 다른 쪽 팔/다리를 쓰고 있다는 뜻 → 크게 틀린 것으로 침
-  const diffs = f.vecs.map((v,i)=> !refSees(i) ? null : (curSees(i) ? angDepthSoft(v, ref.vecs[i]) : 60));
-  let worst=-1, sum=0, n=0;
-  diffs.forEach((d,i)=>{ if(d===null) return; sum+=d; n++; if(worst<0 || d>diffs[worst]) worst=i; });
-  return { diffs, used, n, worst, worstDiff: worst<0?999:diffs[worst], mean: n?sum/n:999, yd:yawDiff(f.yaw, ref.yaw) };
+  // 정답에선 보이던 부위가 지금 안 보이면 = 다른 쪽 팔을 쓰고 있다는 뜻 → 크게 틀린 것으로 침
+  const diffs = f.vecs.map((v,i)=> !refSees(i) ? null : (!curSees(i) ? 60 : (deep(i) ? null : angDepthSoft(v, ref.vecs[i]))));
+  let worst=-1, sum=0, k=0, n=0;
+  SEGS.forEach((_,i)=>{ if(refSees(i)) n++; });
+  diffs.forEach((d,i)=>{ if(d===null) return; sum+=d; k++; if(worst<0 || d>diffs[worst]) worst=i; });
+  return { diffs, used, n, m:k, worst, worstDiff: worst<0?0:diffs[worst], mean: k?sum/k:0, yd:yawDiff(f.yaw, ref.yaw) };
 }
 
 // ---------- 화면 ----------
@@ -812,7 +818,7 @@ function handle(res, now){
     if(!isBasic() && oR.dir && oR.dir!==f.dir) return;   // 다른 방향 동작과는 비교 안 함
     const oc=compare(f,oR);
     if(isBasic() && compare(R,oR).mean < 15) return;                          // 좌우 대칭 자세(준비 등)는 손바뀜 판정 안 함
-    if(oc.n < MIN_PARTS()) return;
+    if(oc.m < 2) return;   // 실제로 각도를 비교한 부위가 2개 이상일 때만 '다른 동작' 판단
     if(oc.mean<otherScore){ otherScore=oc.mean; other=o; otherC=oc; }
   });
   if(!isBasic()){
@@ -820,7 +826,7 @@ function handle(res, now){
     const tw = mirrorRef(R);
     if(compare(R, tw).mean >= 15){
       const oc = compare(f, tw);
-      if(oc.n>=MIN_PARTS() && oc.mean < otherScore){ otherScore=oc.mean; other={ name:'반대 손', twin:true }; otherC=oc; }
+      if(oc.m>=2 && oc.mean < otherScore){ otherScore=oc.mean; other={ name:'반대 손', twin:true }; otherC=oc; }
     }
   }
   const isClosest = isPrepStep || !other || c.mean <= otherScore;   // 예비동작은 '반대 손이 더 가깝다'로 막지 않음
@@ -867,7 +873,7 @@ function handle(res, now){
   }else{
     holdStart=null;
     // 다른 동작을 또렷하게 하고 있으면 = 순서 착각(손바뀜·동작바뀜)
-    const doingOther = !isPrepStep && okDir && other && !isClosest && otherC.n>=MIN_PARTS() && otherC.worstDiff<=tol;   // 예비동작은 손바뀜 판정 안 함
+    const doingOther = !isPrepStep && okDir && other && !isClosest && otherC.m>=2 && otherC.worstDiff<=tol;   // 예비동작은 손바뀜 판정 안 함
     if(doingOther){
       if(wrongStart===null) wrongStart=now;
       if(now-wrongStart >= holdSec*1500){
