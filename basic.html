@@ -178,6 +178,7 @@
       </div>
       <div class="row" style="margin-top:6px">
         <button id="serverBtn">☁ 공용 정답 받기</button>
+        <button id="storeBtn">🔍 저장된 정답 확인</button>
       </div>
       <small>정답 자세는 이 브라우저에 자동 저장됩니다. 다른 기기로 옮길 때는 파일로 내보내세요.</small>
     </div>
@@ -241,10 +242,11 @@ const POOMSAE_DEF = [
   ['14. 앞차고 지르기','앞차고 지르기 둘'],
   ['15. 돌아 얼굴막기','앞에발 뒤로 돌아 얼굴 막기'],
   ['16. 앞차고 지르기','앞차고 지르기 둘'],
-  ['17. 앞굽이 아래막기','앞에발 앞에손 앞굽이 아래 막기'],
-  ['18. 지르기 기합','걸어가서 기합 앗'],
+  ['17. 앞굽이 아래막기','앞에발 앞에손 앞굽이 아래 막기', 'back'],
+  ['18. 지르기 기합','걸어가서 기합 앗', 'back'],
 ];
-function buildPoomsaeSteps(){ return POOMSAE_DEF.map(([n,c],i)=>({ name:n, key:'P|'+i, mirror:false, cue:c })); }
+// 'back' = 카메라에 등을 보이는 동작: 카메라 한 대로는 좌우 팔이 뒤바뀌어 보여 판정 불가 → 구령만 주고 3초 뒤 넘어감
+function buildPoomsaeSteps(){ return POOMSAE_DEF.map(([n,c,flag],i)=>({ name:n, key:'P|'+i, mirror:false, cue:c, back: flag==='back' })); }
 
 // ---------- 저장 (v2: 판정 방식이 바뀌어 예전 정답은 다시 녹화 필요) ----------
 // ---------- 연습 종류: 기본동작(팔만·정면) / 품새 ----------
@@ -329,7 +331,7 @@ let bucket = 0, bucketStep = -1, lastJudgeT = 0;
 let stepStartT = 0, stepStartStep = -1, sessionStart = 0, skipped = [], stepLog = [];
 function finishReport(now){
   saveSessionLog(true);
-  setTimeout(()=>setPractice('idle'),0);
+  setPractice('idle');   // 바로 멈춰야 같은 기록이 여러 번 저장되지 않음
   const total = Math.round((now-sessionStart)/1000);
   const slow = stepLog.filter(x=>!x.skip).sort((a,b)=>b.ms-a.ms).slice(0,3).map(x=>x.name+' '+(x.ms/1000).toFixed(1)+'초');
   let t = '🎉 완료! '+total+'초';
@@ -787,6 +789,14 @@ function handle(res, now){
   if(practiceState!=='running'){ shadowOk=false; setBar(0,'#333'); return; }
   const step=data.steps[cur];
   if(!step) return;
+  if(step.back){
+    if(stepStartStep!==cur){ stepStartStep=cur; stepStartT=now; if(!sessionStart) sessionStart=now; }
+    const p=(now-stepStartT)/3000; setBar(p,'#69f'); shadowOk=false;
+    $('feedback').textContent='뒤돌아 하는 동작은 판정하지 않아요. 구령에 맞춰 동작하세요';
+    if(p>=1){ passed.add(cur); passAt=now; stepLog.push({ name:step.name, idx:cur, ms:now-stepStartT });
+      if(cur < data.steps.length-1){ cur++; renderSteps(); updateTitle('👍 다음 동작'); } else { renderSteps(); finishReport(now); } }
+    return;
+  }
   const R = refOf(step);
   if(!R){ $('feedback').textContent='이 동작은 정답이 없습니다 (정답 녹화 모드에서 저장)'; setBar(0,'#e33'); return; }
 
@@ -810,6 +820,7 @@ function handle(res, now){
   const stepBase = step.name.replace(/^[0-9]+\.\s*/,'');
   data.steps.forEach((o,i)=>{
     if(i===cur) return;
+    if(!isBasic()) return;   // 품새: 다른 동작과 비교하지 않음 (실측: 막고-지르기처럼 이어지는 동작을 '틀림'으로 오판) → 손바뀜만 아래에서 따로 봄
     if(isBasic() && !(o.key===step.key && o.mirror!==step.mirror)) return;   // 기본동작: 좌우 반대 손(손바뀜)만 비교 (가벼운 검사 먼저)
     // 같은 기술이 반복되는 동작(이름에서 번호 뺀 부분이 같음)은 '틀림'으로 보지 않음
     if(o.name.replace(/^[0-9]+\.\s*/,'')===stepBase) return;
@@ -824,7 +835,7 @@ function handle(res, now){
   if(!isBasic()){
     // 품새: 같은 기술을 반대 손으로 하고 있는지 (손바뀜)
     const tw = mirrorRef(R);
-    if(compare(R, tw).mean >= 15){
+    if(compare(R, tw).mean >= 20){   // 준비처럼 좌우가 거의 같은 자세는 손바뀜 판정 안 함
       const oc = compare(f, tw);
       if(oc.m>=2 && oc.mean < otherScore){ otherScore=oc.mean; other={ name:'반대 손', twin:true }; otherC=oc; }
     }
@@ -851,7 +862,7 @@ function handle(res, now){
   { const S=statFor(cur, step.name); S.frames++; if(shadowOk) S.okFrames++;
     if(c.n>=MIN_PARTS()){ S.best.worst=Math.min(S.best.worst,c.worstDiff); S.best.mean=Math.min(S.best.mean,c.mean); }
     S.best.pos=Math.min(S.best.pos, pc.worst);
-    if(c.n<MIN_PARTS()) S.fail.hidden++; else if(!okLimbs) S.fail.limb++; else if(!okPos) S.fail.pos++; else if(!isClosest) S.fail.hand++;
+    if(!okDir) S.fail.dir=(S.fail.dir||0)+1; else if(c.n<MIN_PARTS()) S.fail.hidden++; else if(!okLimbs) S.fail.limb++; else if(!okPos) S.fail.pos++; else if(!isClosest) S.fail.hand++;
     if(!shadowOk){ const part = !okLimbs && c.worst>=0 ? SEGS[c.worst].name.replace('(주먹 방향)','') : (!okPos ? pc.name : (!isClosest?'손바뀜':'')); if(part) S.worstPart[part]=(S.worstPart[part]||0)+1; } }
   // 유지 판정: 한두 프레임 흔들려도 바로 0으로 돌아가지 않게 '양동이'에 시간을 채움
   const dt = Math.min(100, now - (lastJudgeT||now)); lastJudgeT = now;
@@ -1058,7 +1069,7 @@ function autoAfter(ok, ref, now){
   if(!ok){ autoAnnounce(now, true); return; }
   autoRec.lastRef=ref;
   let i=cur+1; while(i<data.steps.length && !autoTarget(i)) i++;
-  if(i>=data.steps.length){ renderSteps(); autoStop('✅ 연속 녹화 완료!'); if('speechSynthesis' in window){ const u=new SpeechSynthesisUtterance('녹화 끝'); u.lang='ko-KR'; speechSynthesis.speak(u); } return; }
+  if(i>=data.steps.length){ renderSteps(); autoStop('✅ 연속 녹화 완료! ⚙ 메뉴 → [파일로 내보내기]로 꼭 백업하세요'); if('speechSynthesis' in window){ const u=new SpeechSynthesisUtterance('녹화 끝'); u.lang='ko-KR'; speechSynthesis.speak(u); } return; }
   cur=i; renderSteps(); autoAnnounce(now, false);
 }
 
@@ -1176,8 +1187,21 @@ async function loadShared(force){
     save(); cur=0; passed.clear(); renderSteps(); updateTitle('☁ 공용 정답을 받았습니다');
   }catch(e){ if(force) $('feedback').textContent='공용 정답을 받지 못했습니다: '+(e.message||e); }
 }
+$('storeBtn').onclick=()=>{
+  const lines=[];
+  const names={ basic_proto_v2:'기본동작 (현재)', basic_proto_v1:'기본동작 (옛 버전)', poomsae_proto_v3:'품새 (현재)', poomsae_proto_v2:'품새 (옛 버전)', poomsae_proto_v1:'품새 (아주 옛 버전)', practice_logs_v1:'연습 기록' };
+  Object.keys(names).forEach(k=>{
+    let v=null; try{ v=localStorage.getItem(k); }catch(e){}
+    if(!v){ lines.push('– '+names[k]+': 없음'); return; }
+    let cnt='?'; try{ const d=JSON.parse(v); cnt = Array.isArray(d) ? d.length+'회' : d.refs ? Object.keys(d.refs).length+'개 자세' : d.steps ? d.steps.filter(x=>x.ref).length+'개 자세' : '?'; }catch(e){}
+    lines.push('✓ '+names[k]+': '+cnt+' ('+Math.round(v.length/1024)+'KB)');
+  });
+  alert('이 브라우저에 저장된 데이터\n\n'+lines.join('\n')+'\n\n※ 같은 폰이라도 카톡/크롬/삼성인터넷은 서로 따로 저장됩니다');
+};
 $('serverBtn').onclick=()=>{ if(confirm('이 폰에 저장된 정답·구령을 공용 정답으로 바꿀까요?')) loadShared(true); };
 loadShared(false);
+// 브라우저가 저장 공간 부족 등으로 정답을 지우지 않도록 '영구 보관' 요청
+try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
 
 setMode('practice');
 renderSteps(); updateTitle('');
