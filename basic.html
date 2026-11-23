@@ -491,7 +491,7 @@ function playCue(st){
 let practiceState='idle', countdownEnd=0, pauseAt=0;
 function resetSession(){
   cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear();
-  skipped=[]; stepLog=[]; sessionStart=0; stepStartStep=-1; bucket=0; bucketStep=-1; lastCued=-1;
+  skipped=[]; stepLog=[]; sessionStart=0; stepStartStep=-1; bucket=0; bucketStep=-1; lastCued=-1; kidLen=null;
 }
 function setPractice(st){
   practiceState=st;
@@ -597,7 +597,7 @@ function loop(){
 function handle(res, now){
   const lm = res.landmarks && res.landmarks[0];
   const world = res.worldLandmarks && res.worldLandmarks[0];
-  if(!lm || !world){ $('judgePanel').style.display='none'; smooth=null; holdStart=null; setBar(0,'#e33'); $('feedback').textContent='사람이 안 보입니다'; return; }
+  if(!lm || !world){ $('judgePanel').style.display='none'; smooth=null; kidLen=null; holdStart=null; setBar(0,'#e33'); $('feedback').textContent='사람이 안 보입니다'; return; }
   // 화면 안에 있는지는 좌표로 확인 (AI의 '보임 점수'는 어두운 바지·바닥에서 낮게 나와 믿기 어려움)
   const inFrame = (isBasic() ? [11,12,23,24] : [11,12,23,24,27,28]).every(i => lm[i].x>-0.02 && lm[i].x<1.02 && lm[i].y>-0.02 && lm[i].y<1.03);
   const visible = inFrame && [11,12,23,24].every(i => (lm[i].visibility ?? 1) > 0.3);
@@ -698,7 +698,7 @@ function handle(res, now){
   });
   const isClosest = !other || c.mean <= otherScore;
 
-  lastArmRatio = f.armRatio;
+  lastArmRatio = f.armRatio; updateKidLen(f);
   const okLimbs = c.n >= MIN_PARTS() && c.worstDiff <= tol && c.mean <= tol*0.65;   // 가장 틀린 부위 + 평균 둘 다
   const pc = posCheck(f, R);
   const posTol = tol/100;                                                              // 35° ↔ 팔 길이의 35%
@@ -750,7 +750,7 @@ function handle(res, now){
     if(!okDir) hint='🔄 방향이 틀렸어요! '+DIR_NAME[R.dir]+'(으)로 서야 해요';
     else if(c.n<MIN_PARTS()) hint= isBasic() ? '양팔이 화면에 보이게 서 주세요' : '팔다리가 너무 많이 가려졌어요. 카메라 위치를 바꿔보세요';
     else if(!okLimbs) hint= c.worstDiff>tol ? SEGS[c.worst].name+' 확인 ('+Math.round(c.worstDiff)+'° 차이)' : '팔 전체를 쉐도우에 더 정확히 맞춰요';
-    else if(!okPos) hint=pc.name+' 위치를 쉐도우에 맞춰요';
+    else if(!okPos) hint= /왼/.test(pc.name) ? '🔵 파란 동그라미에 왼손을 넣어요' : '🔴 빨간 동그라미에 오른손을 넣어요';
     else if(!okYaw) hint='몸 방향을 확인하세요';
     else hint='"'+other.name+'" 동작과 더 비슷해요';
     $('feedback').textContent=hint;
@@ -788,25 +788,46 @@ function estimateDirection(lm){
 let shadowOk=false;
 // 아이 팔 길이에 맞춰 정답 자세를 늘이고 줄임 (만 3세처럼 팔이 짧은 아이 대응)
 let lastArmRatio=null;
-function fitPts(r, kidRatio){
+// ---- 팔 길이 맞추기: 화면상 위팔·아래팔 길이를 정답과 아이 각각 재서 부위별로 늘이고 줄임 ----
+let kidLen=null;            // 아이의 최근 최대 위팔/아래팔 길이 (몸통 단위)
+function segLens(pts){
+  const d=(a,b)=>Math.hypot(pts[a][0]-pts[b][0], pts[a][1]-pts[b][1]);
+  return { up:Math.max(d(11,13),d(12,14)), fore:Math.max(d(13,15),d(14,16)) };
+}
+function updateKidLen(f){
+  if(!f.pts) return;
+  const c=segLens(f.pts);
+  if(!kidLen) kidLen={ up:c.up, fore:c.fore };
+  else { kidLen.up=Math.max(kidLen.up*0.997, c.up); kidLen.fore=Math.max(kidLen.fore*0.997, c.fore); }   // 팔을 뻗었을 때 길이를 기억
+}
+function refLen(){
+  let up=0, fore=0;
+  const refs = isBasic() ? Object.values(data.refs||{}) : data.steps.map(x=>x.ref);
+  refs.forEach(r=>{ if(r && r.pts && r.pts[15]){ const l=segLens(r.pts); up=Math.max(up,l.up); fore=Math.max(fore,l.fore); } });
+  return (up && fore) ? { up, fore } : null;
+}
+function fitPts(r){
   if(!r || !r.pts) return null;
-  let k = (r.armRatio && kidRatio) ? kidRatio/r.armRatio : 1;
-  k = Math.max(0.6, Math.min(1.4, k));
+  const R=refLen();
+  const clamp=v=>Math.max(0.5, Math.min(1.3, v));
+  const kU = (R && kidLen) ? clamp(kidLen.up/R.up) : 1;
+  const kF = (R && kidLen) ? clamp(kidLen.fore/R.fore) : 1;
   const o = {}; Object.keys(r.pts).forEach(i=>o[i]=r.pts[i].slice());
   [[11,13,15],[12,14,16]].forEach(([sh,el,wr])=>{
     if(!r.pts[sh]||!r.pts[el]||!r.pts[wr]) return;
-    const e=[r.pts[sh][0]+(r.pts[el][0]-r.pts[sh][0])*k, r.pts[sh][1]+(r.pts[el][1]-r.pts[sh][1])*k];
-    const w=[e[0]+(r.pts[wr][0]-r.pts[el][0])*k, e[1]+(r.pts[wr][1]-r.pts[el][1])*k];
+    const e=[r.pts[sh][0]+(r.pts[el][0]-r.pts[sh][0])*kU, r.pts[sh][1]+(r.pts[el][1]-r.pts[sh][1])*kU];
+    const w=[e[0]+(r.pts[wr][0]-r.pts[el][0])*kF, e[1]+(r.pts[wr][1]-r.pts[el][1])*kF];
     o[el]=e; o[wr]=w;
   });
   return o;
 }
+const kidArm = () => kidLen ? Math.max(0.5, kidLen.up+kidLen.fore) : 0.9;
 // 팔꿈치·손목이 (아이 몸에 맞춘) 쉐도우에서 얼마나 벗어났나 — 팔 길이 대비 비율
 const POS_PARTS = [[13,'왼 팔꿈치'],[15,'왼 손'],[14,'오른 팔꿈치'],[16,'오른 손']];
 function posCheck(f, r){
-  const fp = fitPts(r, f.armRatio);
+  const fp = fitPts(r);
   if(!fp || !f.pts) return { worst:0, name:'' };
-  const arm = Math.max(0.5, (f.armRatio||1.2)*0.75);   // 화면상 팔 길이(몸통 단위) 근사
+  const arm = kidArm();
   let worst=0, name='';
   POS_PARTS.forEach(([i,nm])=>{
     const segIdx = (i===13||i===15) ? [0,1] : [2,3];
@@ -821,17 +842,29 @@ function drawShadow(lm){
   const st=data.steps[cur]; if(!st) return;
   const r=refOf(st); if(!r || !r.pts) return;
   const a=bodyAnchor(lm);
-  const fp=fitPts(r, lastArmRatio) || r.pts;
+  const fp=fitPts(r) || r.pts;
   const P=i=>{ const q=fp[i]; return q ? [a.mx+q[0]*a.t, a.my+q[1]*a.t] : null; };
-  const lines = isBasic() ? [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]]
-                          : [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]];
+  const lines = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]];
+  const prep = isBasic() && /예비/.test(st.name);
+  const radius = (+$('tol').value*(prep?1.3:1)/100) * kidArm() * a.t;   // 이 동그라미 안에 손이 들어가면 위치 통과
   ctx.save();
   if($('mirror').checked){ ctx.translate(cv.width,0); ctx.scale(-1,1); }
   ctx.lineCap='round';
-  ctx.strokeStyle = shadowOk ? 'rgba(80,230,120,0.75)' : 'rgba(120,200,255,0.7)';
-  ctx.lineWidth = Math.max(10, a.t*0.09);
+  // 1) 따라 할 팔 (반투명)
+  ctx.strokeStyle = shadowOk ? 'rgba(80,230,120,0.55)' : 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = Math.max(8, a.t*0.06);
   lines.forEach(([i,j])=>{ const p=P(i), q=P(j); if(!p||!q) return; ctx.beginPath(); ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]); ctx.stroke(); });
-  [15,16].forEach(i=>{ const p=P(i); if(!p) return; ctx.beginPath(); ctx.arc(p[0],p[1],Math.max(10,a.t*0.08),0,Math.PI*2); ctx.fillStyle=ctx.strokeStyle; ctx.fill(); });
+  // 2) 손이 가야 할 동그라미 (왼손 파랑, 오른손 빨강) + 아이 손 점
+  [[15,'40,120,255'],[16,'255,60,60']].forEach(([i,rgb])=>{
+    const p=P(i); if(!p) return;
+    const hx=lm[i].x*a.W, hy=lm[i].y*a.H;
+    const inside = Math.hypot(hx-p[0], hy-p[1]) <= radius;
+    ctx.beginPath(); ctx.arc(p[0],p[1],radius,0,Math.PI*2);
+    ctx.fillStyle='rgba('+rgb+','+(inside?0.55:0.15)+')'; ctx.fill();
+    ctx.lineWidth=Math.max(4,a.t*0.025); ctx.strokeStyle='rgba('+rgb+',0.95)'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(hx,hy,Math.max(8,a.t*0.05),0,Math.PI*2);
+    ctx.fillStyle='rgba('+rgb+',1)'; ctx.fill(); ctx.lineWidth=3; ctx.strokeStyle='#fff'; ctx.stroke();
+  });
   ctx.restore();
 }
 
