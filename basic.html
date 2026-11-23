@@ -176,6 +176,18 @@
       </div>
       <small>정답 자세는 이 브라우저에 자동 저장됩니다. 다른 기기로 옮길 때는 파일로 내보내세요.</small>
     </div>
+    <div class="card">
+      <h3>연습 기록 (분석용)</h3>
+      <label>아이 (이름 대신 번호·별명 권장)
+        <input id="kidLabel" placeholder="예: 5세-1, 민준" style="width:100%;padding:8px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444"></label>
+      <label>이 기기 이름
+        <input id="deviceLabel" placeholder="예: 폰A" style="width:100%;padding:8px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444"></label>
+      <div class="row" style="margin-top:6px">
+        <button id="logExportBtn">📊 기록 내보내기</button>
+        <button id="logClearBtn">기록 지우기</button>
+      </div>
+      <small id="logCount"></small>
+    </div>
   </aside>
 </main>
 
@@ -290,6 +302,7 @@ let holdStart = null;
 let bucket = 0, bucketStep = -1, lastJudgeT = 0;
 let stepStartT = 0, stepStartStep = -1, sessionStart = 0, skipped = [], stepLog = [];
 function finishReport(now){
+  saveSessionLog(true);
   setTimeout(()=>setPractice('idle'),0);
   const total = Math.round((now-sessionStart)/1000);
   const slow = stepLog.filter(x=>!x.skip).sort((a,b)=>b.ms-a.ms).slice(0,3).map(x=>x.name+' '+(x.ms/1000).toFixed(1)+'초');
@@ -489,7 +502,32 @@ function playCue(st){
 }
 // ---------- 연습 시작 / 일시정지 / 정지 ----------
 let practiceState='idle', countdownEnd=0, pauseAt=0;
+// ---------- 연습 기록: 단계별로 왜 실패했는지 모아 둠 ----------
+let stepStats={};
+const LOG_KEY='practice_logs_v1';
+function loadLogs(){ try{ return JSON.parse(localStorage.getItem(LOG_KEY)||'[]'); }catch(e){ return []; } }
+function showLogCount(){ const el=$('logCount'); if(el) el.textContent='저장된 기록 '+loadLogs().length+'회'; }
+function statFor(i, name){
+  if(!stepStats[i]) stepStats[i]={ name, frames:0, okFrames:0, best:{ worst:999, mean:999, pos:9 }, fail:{ limb:0, pos:0, hand:0, hidden:0 }, worstPart:{} };
+  return stepStats[i];
+}
+function saveSessionLog(completed){
+  if(!sessionStart || !stepLog.length) return;
+  const steps = stepLog.map((x,i)=>{ const st=stepStats[x.idx]||{}; return { step:x.name, sec:+(x.ms/1000).toFixed(1), result:x.skip?'넘어감':'통과',
+      frames:st.frames||0, okRate: st.frames? +(st.okFrames/st.frames).toFixed(2):null,
+      bestWorstDeg: st.best? Math.round(st.best.worst):null, bestMeanDeg: st.best? Math.round(st.best.mean):null, bestPosPct: st.best? Math.round(st.best.pos*100):null,
+      failFrames: st.fail||null, mostWrongPart: st.worstPart ? (Object.entries(st.worstPart).sort((a,b)=>b[1]-a[1])[0]||[null])[0] : null }; });
+  const log={ at:new Date().toISOString(), kid:$('kidLabel').value||'', device:$('deviceLabel').value||'', completed,
+    kind, range: isBasic()? basicRange.map(i=>BASIC_DEF[i].name):null, tol:+$('tol').value, hold:+$('hold').value, skipSec:+$('skip').value,
+    model:$('model').value, totalSec: Math.round((performance.now()-sessionStart)/1000),
+    kidArm: kidLen ? { up:+kidLen.up.toFixed(2), fore:+kidLen.fore.toFixed(2) } : null,
+    mistakes: mistakes.slice(), steps };
+  const logs=loadLogs(); logs.push(log); while(logs.length>300) logs.shift();
+  try{ localStorage.setItem(LOG_KEY, JSON.stringify(logs)); }catch(e){}
+  showLogCount();
+}
 function resetSession(){
+  stepStats={};
   cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear();
   skipped=[]; stepLog=[]; sessionStart=0; stepStartStep=-1; bucket=0; bucketStep=-1; lastCued=-1; kidLen=null;
 }
@@ -519,6 +557,7 @@ function practiceStartPause(){
 }
 function practiceStop(){
   try{ if(curAudio) curAudio.pause(); if('speechSynthesis' in window) speechSynthesis.cancel(); }catch(e){}
+  saveSessionLog(false);
   resetSession(); renderSteps(); setPractice('idle'); updateTitle('▶ 시작을 누르세요');
 }
 function practiceTick(now){
@@ -674,7 +713,7 @@ function handle(res, now){
   if(stepStartStep!==cur){ stepStartStep=cur; stepStartT=now; if(cur===0 || !sessionStart) sessionStart=now; }
   const skipSec=+$('skip').value;
   if(skipSec>0 && now-stepStartT > skipSec*1000 && !passed.has(cur)){
-    skipped.push(step.name); stepLog.push({ name:step.name, ms:now-stepStartT, skip:true });
+    skipped.push(step.name); stepLog.push({ name:step.name, idx:cur, ms:now-stepStartT, skip:true });
     passAt=now; bucket=0;
     if(cur < data.steps.length-1){ cur++; renderSteps(); updateTitle('⏭ 다음으로 넘어가요'); }
     else { renderSteps(); finishReport(now); }
@@ -715,6 +754,11 @@ function handle(res, now){
   } else $('judgePanel').style.display='none';
 
   shadowOk = okDir && okLimbs && okYaw && isClosest && okPos;
+  { const S=statFor(cur, step.name); S.frames++; if(shadowOk) S.okFrames++;
+    if(c.n>=MIN_PARTS()){ S.best.worst=Math.min(S.best.worst,c.worstDiff); S.best.mean=Math.min(S.best.mean,c.mean); }
+    S.best.pos=Math.min(S.best.pos, pc.worst);
+    if(c.n<MIN_PARTS()) S.fail.hidden++; else if(!okLimbs) S.fail.limb++; else if(!okPos) S.fail.pos++; else if(!isClosest) S.fail.hand++;
+    if(!shadowOk){ const part = !okLimbs && c.worst>=0 ? SEGS[c.worst].name.replace('(주먹 방향)','') : (!okPos ? pc.name : (!isClosest?'손바뀜':'')); if(part) S.worstPart[part]=(S.worstPart[part]||0)+1; } }
   // 유지 판정: 한두 프레임 흔들려도 바로 0으로 돌아가지 않게 '양동이'에 시간을 채움
   const dt = Math.min(100, now - (lastJudgeT||now)); lastJudgeT = now;
   if(bucketStep!==cur){ bucket=0; bucketStep=cur; }
@@ -726,7 +770,7 @@ function handle(res, now){
     $('feedback').textContent='좋아요! 그대로 유지';
     if(p>=1){
       passed.add(cur); holdStart=null;
-      passAt=now; stepLog.push({ name:step.name, ms:now-stepStartT });
+      passAt=now; stepLog.push({ name:step.name, idx:cur, ms:now-stepStartT });
       if(cur < data.steps.length-1){ cur++; renderSteps(); updateTitle('👍 통과! 다음 동작'); }
       else {
         renderSteps(); finishReport(now);
@@ -944,6 +988,17 @@ $('fPrev').onclick=()=>$('prevBtn').click();
 $('fNext').onclick=()=>$('nextBtn').click();
 $('fReset').onclick=()=>$('resetBtn').click();
 $('fStart').onclick=practiceStartPause;
+$('logExportBtn').onclick=async()=>{
+  const logs=loadLogs(); if(!logs.length){ alert('저장된 기록이 없습니다'); return; }
+  const name='practice-log-'+($('deviceLabel').value||'phone')+'-'+new Date().toISOString().slice(0,10)+'.json';
+  const text=JSON.stringify(logs);
+  try{ const file=new File([text], name, { type:'application/json' });
+       if(navigator.canShare && navigator.canShare({ files:[file] })){ await navigator.share({ files:[file], title:name }); return; } }catch(e){ if(e && e.name==='AbortError') return; }
+  const url=URL.createObjectURL(new Blob([text],{type:'application/octet-stream'})); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },4000);
+};
+$('logClearBtn').onclick=()=>{ if(confirm('저장된 연습 기록을 모두 지울까요? (먼저 내보내기 하셨나요?)')){ try{ localStorage.removeItem(LOG_KEY); }catch(e){} showLogCount(); } };
+['kidLabel','deviceLabel'].forEach(id=>{ try{ $(id).value=localStorage.getItem(id)||''; }catch(e){} $(id).oninput=()=>{ try{ localStorage.setItem(id,$(id).value); }catch(e){} }; });
+showLogCount();
 $('fStop').onclick=practiceStop;
 $('fCapture').onclick=capture;
 $('fVoice').onclick=recordVoice;
