@@ -122,8 +122,15 @@
     </div>
     <div class="card">
       <h3>판정 설정</h3>
+      <label>난이도
+        <select id="level" style="width:100%;padding:6px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444">
+          <option value="45">유아 (만 3~6세, 느슨)</option>
+          <option value="32" selected>초등 (보통)</option>
+          <option value="22">심사 대비 (엄격)</option>
+          <option value="">직접 조절</option>
+        </select></label>
       <label>허용 오차: <b id="tolV"></b>°  <small>(팔·다리 중 가장 틀린 부위 기준, 작을수록 엄격)</small>
-        <input type="range" id="tol" min="10" max="60" value="35"></label>
+        <input type="range" id="tol" min="10" max="60" value="32"></label>
       <label>유지 시간: <b id="holdV"></b>초
         <input type="range" id="hold" min="0.3" max="2" step="0.1" value="1.0"></label>
       <label><input type="checkbox" id="useDir" checked> 방향 전환 판정 <small>— 정면/왼쪽/오른쪽 구분</small></label>
@@ -244,7 +251,7 @@ function mirrorRef(r){
   const vis = r.vis ? SEG_PAIR.map(j=>r.vis[j]) : null;
   let pts=null;
   if(r.pts){ pts={}; Object.keys(r.pts).forEach(k=>{ const q=r.pts[PT_PAIR[k]]; if(q) pts[k]=[-q[0], q[1]]; }); }
-  return { vecs, vis, yaw:r.yaw, dir:r.dir, pts };
+  return { vecs, vis, yaw:r.yaw, dir:r.dir, pts, armRatio:r.armRatio };
 }
 function refOf(st){
   if(st.key!==undefined){ const r=data.refs[st.key]; return validRef(r) ? (st.mirror ? mirrorRef(r) : r) : null; }
@@ -257,6 +264,7 @@ let mode = 'practice';
 let cur = 0;
 let passed = new Set();
 let holdStart = null;
+let bucket = 0, bucketStep = -1, lastJudgeT = 0;
 let wrongStart = null;
 let mistakes = [];          // { step: 단계 이름, did: 대신 한 동작 }
 const mistakeLogged = new Set();
@@ -276,6 +284,9 @@ const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const norm=a=>{ const n=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/n,a[1]/n,a[2]/n]; };
 const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const angBetween=(a,b)=>Math.acos(Math.max(-1,Math.min(1,dot(a,b))))*180/Math.PI;
+// 카메라 한 대는 앞뒤(깊이) 값이 가장 부정확 → 기본동작에선 깊이 성분을 덜 믿음
+const Z_WEIGHT = 0.6;
+const angDepthSoft=(a,b)=>angBetween(norm([a[0],a[1],a[2]*Z_WEIGHT]), norm([b[0],b[1],b[2]*Z_WEIGHT]));
 
 function smoothWorld(world){
   const p = world.map(l=>[l.x,l.y,l.z]);
@@ -308,7 +319,10 @@ function features(P, lm){
   const vecs = SEGS.map(s=>{ const v=norm(sub(P[s.b],P[s.a])); return [dot(v,X),dot(v,up),dot(v,Z)]; });
   const yaw = Math.atan2(P[12][2]-P[11][2], P[12][0]-P[11][0])*180/Math.PI;
   const vis = SEGS.map(sg=> lm ? Math.min(lm[sg.a].visibility ?? 1, lm[sg.b].visibility ?? 1) : 1);
-  return { vecs, yaw, vis, pts: lm ? pts2d(lm) : null };
+  const len=(a,b)=>Math.hypot(P[a][0]-P[b][0],P[a][1]-P[b][1],P[a][2]-P[b][2]);
+  const torso3=Math.hypot(midSh[0]-midHip[0],midSh[1]-midHip[1],midSh[2]-midHip[2])||1;
+  const armRatio=((len(11,13)+len(13,15))+(len(12,14)+len(14,16)))/2/torso3;   // 팔 길이 ÷ 몸통 길이
+  return { vecs, yaw, vis, pts: lm ? pts2d(lm) : null, armRatio };
 }
 function yawDiff(a,b){ let d=Math.abs(a-b)%360; return d>180?360-d:d; }
 function avgFeatures(list){
@@ -320,7 +334,8 @@ function avgFeatures(list){
   let pts=null;
   const withPts=list.filter(f=>f.pts);
   if(withPts.length){ pts={}; PT_IDS.forEach(i=>{ pts[i]=[withPts.reduce((s,f)=>s+f.pts[i][0],0)/withPts.length, withPts.reduce((s,f)=>s+f.pts[i][1],0)/withPts.length]; }); }
-  return { vecs, yaw: Math.atan2(sy,sx)*180/Math.PI, vis, dir, pts };
+  const armRatio = list.reduce((s,f)=>s+(f.armRatio||0),0)/list.length || null;
+  return { vecs, yaw: Math.atan2(sy,sx)*180/Math.PI, vis, dir, pts, armRatio };
 }
 const VIS_MIN = 0.3;    // 이보다 낮으면 '가려진 부위'로 보고 판정에서 뺌
 function compare(f, ref){
@@ -328,7 +343,7 @@ function compare(f, ref){
   const curSees = i => !f.vis || f.vis[i]>=VIS_MIN;
   const used = SEGS.map((_,i)=> refSees(i));
   // 정답에선 보이던 부위가 지금 안 보이면 = 다른 쪽 팔/다리를 쓰고 있다는 뜻 → 크게 틀린 것으로 침
-  const diffs = f.vecs.map((v,i)=> !refSees(i) ? null : (curSees(i) ? angBetween(v, ref.vecs[i]) : 60));
+  const diffs = f.vecs.map((v,i)=> !refSees(i) ? null : (curSees(i) ? (isBasic() ? angDepthSoft(v, ref.vecs[i]) : angBetween(v, ref.vecs[i])) : 60));
   let worst=-1, sum=0, n=0;
   diffs.forEach((d,i)=>{ if(d===null) return; sum+=d; n++; if(worst<0 || d>diffs[worst]) worst=i; });
   return { diffs, used, n, worst, worstDiff: worst<0?999:diffs[worst], mean: n?sum/n:999, yd:yawDiff(f.yaw, ref.yaw) };
@@ -537,6 +552,8 @@ function handle(res, now){
         const good = (isBasic()?4:SEGS.length) - excluded.length;
         if(samples.length < 5){
           $('feedback').textContent='❌ 측정 중 사람을 놓쳤습니다. 전신이 보이게 서서 다시 해주세요';
+        }else if(isBasic() && good < 4){
+          $('feedback').textContent='❌ 팔이 흔들렸거나 가려졌어요 ('+excluded.join(', ')+'). 완전히 멈춘 자세로 다시 저장해 주세요';
         }else if(good < MIN_PARTS()){
           $('feedback').textContent='❌ 제대로 보이는 부위가 '+good+'개뿐입니다 (가려지거나 흔들림: '+excluded.join(', ')+'). 카메라 위치를 바꿔보세요';
         }else{
@@ -583,22 +600,30 @@ function handle(res, now){
   });
   const isClosest = !other || c.mean <= otherScore;
 
-  const okLimbs = c.n >= MIN_PARTS() && c.worstDiff <= tol;
+  lastArmRatio = f.armRatio;
+  const okLimbs = c.n >= MIN_PARTS() && c.worstDiff <= tol && c.mean <= tol*0.65;   // 가장 틀린 부위 + 평균 둘 다
+  const pc = posCheck(f, R);
+  const posTol = tol/100;                                                              // 35° ↔ 팔 길이의 35%
+  const okPos = !isBasic() || pc.worst <= posTol;
   const okYaw = !useYaw || c.yd <= 40;
   const okDir = isBasic() || !$('useDir').checked || !R.dir || R.dir===f.dir;
   const closeness = Math.max(0, 1 - c.worstDiff/(tol*2));
   if($('debug').checked){
     const L=SEGS.map((sg,i)=>{ const nm=sg.name.replace('(주먹 방향)',''); const v=' (보임 '+f.vis[i].toFixed(2)+')'; if(c.diffs[i]===null) return '– '+nm+' 제외'+v; const d=Math.round(c.diffs[i]); return (d>tol?'✗ ':'✓ ')+nm+' '+d+'°'+v; });
     L.push((okYaw?'✓ ':'✗ ')+'몸 방향 '+Math.round(c.yd)+'°'+(useYaw?'':' (판정 안 함)'));
+    L.push((okPos?'✓ ':'✗ ')+'손·팔꿈치 위치 오차 '+Math.round(pc.worst*100)+'% (기준 '+Math.round(posTol*100)+'%) '+pc.name+' / 팔길이비 '+(f.armRatio||0).toFixed(2)+(R.armRatio?' (정답 '+R.armRatio.toFixed(2)+')':''));
     L.push((isClosest?'✓ ':'✗ ')+'지금 동작 평균 '+Math.round(c.mean)+'°'+(other?' / 가장 비슷한 다른 동작 "'+other.name+'" '+Math.round(otherScore)+'°':''));
     $('judgePanel').textContent=dirLine+'\n'+L.join('\n'); $('judgePanel').style.display='block';
   } else $('judgePanel').style.display='none';
 
-  shadowOk = okDir && okLimbs && okYaw && isClosest;
-  if(okDir && okLimbs && okYaw && isClosest){
+  shadowOk = okDir && okLimbs && okYaw && isClosest && okPos;
+  // 유지 판정: 한두 프레임 흔들려도 바로 0으로 돌아가지 않게 '양동이'에 시간을 채움
+  const dt = Math.min(100, now - (lastJudgeT||now)); lastJudgeT = now;
+  if(bucketStep!==cur){ bucket=0; bucketStep=cur; }
+  bucket = shadowOk ? bucket+dt : Math.max(0, bucket - dt*1.5);
+  if(okDir && okLimbs && okYaw && isClosest && okPos){
     wrongStart=null;
-    if(holdStart===null) holdStart=now;
-    const p=(now-holdStart)/(holdSec*1000);
+    const p=bucket/(holdSec*1000);
     setBar(p,'#4c4');
     $('feedback').textContent='좋아요! 그대로 유지';
     if(p>=1){
@@ -628,7 +653,8 @@ function handle(res, now){
     let hint;
     if(!okDir) hint='🔄 방향이 틀렸어요! '+DIR_NAME[R.dir]+'(으)로 서야 해요';
     else if(c.n<MIN_PARTS()) hint= isBasic() ? '양팔이 화면에 보이게 서 주세요' : '팔다리가 너무 많이 가려졌어요. 카메라 위치를 바꿔보세요';
-    else if(!okLimbs) hint=SEGS[c.worst].name+' 확인 ('+Math.round(c.worstDiff)+'° 차이)';
+    else if(!okLimbs) hint= c.worstDiff>tol ? SEGS[c.worst].name+' 확인 ('+Math.round(c.worstDiff)+'° 차이)' : '팔 전체를 쉐도우에 더 정확히 맞춰요';
+    else if(!okPos) hint=pc.name+' 위치를 쉐도우에 맞춰요';
     else if(!okYaw) hint='몸 방향을 확인하세요';
     else hint='"'+other.name+'" 동작과 더 비슷해요';
     $('feedback').textContent=hint;
@@ -664,12 +690,43 @@ function estimateDirection(lm){
 
 // ---------- 쉐도우: 지금 해야 할 동작을 아이 몸 위에 겹쳐 그림 ----------
 let shadowOk=false;
+// 아이 팔 길이에 맞춰 정답 자세를 늘이고 줄임 (만 3세처럼 팔이 짧은 아이 대응)
+let lastArmRatio=null;
+function fitPts(r, kidRatio){
+  if(!r || !r.pts) return null;
+  let k = (r.armRatio && kidRatio) ? kidRatio/r.armRatio : 1;
+  k = Math.max(0.6, Math.min(1.4, k));
+  const o = {}; Object.keys(r.pts).forEach(i=>o[i]=r.pts[i].slice());
+  [[11,13,15],[12,14,16]].forEach(([sh,el,wr])=>{
+    if(!r.pts[sh]||!r.pts[el]||!r.pts[wr]) return;
+    const e=[r.pts[sh][0]+(r.pts[el][0]-r.pts[sh][0])*k, r.pts[sh][1]+(r.pts[el][1]-r.pts[sh][1])*k];
+    const w=[e[0]+(r.pts[wr][0]-r.pts[el][0])*k, e[1]+(r.pts[wr][1]-r.pts[el][1])*k];
+    o[el]=e; o[wr]=w;
+  });
+  return o;
+}
+// 팔꿈치·손목이 (아이 몸에 맞춘) 쉐도우에서 얼마나 벗어났나 — 팔 길이 대비 비율
+const POS_PARTS = [[13,'왼 팔꿈치'],[15,'왼 손'],[14,'오른 팔꿈치'],[16,'오른 손']];
+function posCheck(f, r){
+  const fp = fitPts(r, f.armRatio);
+  if(!fp || !f.pts) return { worst:0, name:'' };
+  const arm = Math.max(0.5, (f.armRatio||1.2)*0.75);   // 화면상 팔 길이(몸통 단위) 근사
+  let worst=0, name='';
+  POS_PARTS.forEach(([i,nm])=>{
+    const segIdx = (i===13||i===15) ? [0,1] : [2,3];
+    if(r.vis && segIdx.some(j=>r.vis[j]<VIS_MIN)) return;   // 정답에서 안 보이던 팔은 제외
+    const d = Math.hypot(f.pts[i][0]-fp[i][0], f.pts[i][1]-fp[i][1]) / arm;
+    if(d>worst){ worst=d; name=nm; }
+  });
+  return { worst, name };
+}
 function drawShadow(lm){
   if(mode!=='practice' || !$('shadow').checked) return;
   const st=data.steps[cur]; if(!st) return;
   const r=refOf(st); if(!r || !r.pts) return;
   const a=bodyAnchor(lm);
-  const P=i=>{ const q=r.pts[i]; return q ? [a.mx+q[0]*a.t, a.my+q[1]*a.t] : null; };
+  const fp=fitPts(r, lastArmRatio) || r.pts;
+  const P=i=>{ const q=fp[i]; return q ? [a.mx+q[0]*a.t, a.my+q[1]*a.t] : null; };
   const lines = isBasic() ? [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]]
                           : [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]];
   ctx.save();
@@ -742,7 +799,9 @@ $('importFile').onchange=async e=>{
   catch(err){ alert('파일 형식이 맞지 않습니다'); }
 };
 const syncLabels=()=>{ $('tolV').textContent=$('tol').value; $('holdV').textContent=$('hold').value; };
-$('tol').oninput=syncLabels; $('hold').oninput=syncLabels; syncLabels();
+$('tol').oninput=()=>{ $('level').value=''; syncLabels(); };
+$('level').onchange=()=>{ if($('level').value){ $('tol').value=$('level').value; syncLabels(); } try{ localStorage.setItem('level',$('level').value); }catch(e){} };
+try{ const lv=localStorage.getItem('level'); if(lv){ $('level').value=lv; $('tol').value=lv; } }catch(e){} $('hold').oninput=syncLabels; syncLabels();
 
 setMode('practice');
 renderSteps(); updateTitle('');
