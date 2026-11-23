@@ -119,6 +119,15 @@
         <option value="poomsae">품새 (방향 전환 포함)</option>
       </select>
       <small>종류마다 정답이 따로 저장됩니다.</small>
+      <div id="rangeBox" style="margin-top:8px">
+        <label>오늘 연습할 동작 (기본동작)
+          <div class="row"><select id="rangeFrom" style="flex:1;padding:6px;border-radius:6px;background:#2a2a2a;color:#eee"></select>
+          <span style="align-self:center">~</span>
+          <select id="rangeTo" style="flex:1;padding:6px;border-radius:6px;background:#2a2a2a;color:#eee"></select></div></label>
+        <small>유아반은 2~3동작씩 끊어서 하는 걸 권장</small>
+        <div class="row" style="margin-top:8px"><button id="flipAllBtn">↔ 정답 좌우 전체 뒤집기</button></div>
+        <small>①이 반대 손으로 녹화됐을 때 (거울 시범으로 녹화한 경우) 한 번 누르세요</small>
+      </div>
     </div>
     <div class="card">
       <h3>판정 설정</h3>
@@ -131,8 +140,10 @@
         </select></label>
       <label>허용 오차: <b id="tolV"></b>°  <small>(팔·다리 중 가장 틀린 부위 기준, 작을수록 엄격)</small>
         <input type="range" id="tol" min="10" max="60" value="32"></label>
-      <label>유지 시간: <b id="holdV"></b>초
-        <input type="range" id="hold" min="0.3" max="2" step="0.1" value="1.0"></label>
+      <label>막히면 넘어가기: <b id="skipV"></b>초 <small>(0 = 안 넘어감)</small>
+        <input type="range" id="skip" min="0" max="30" step="1" value="10"></label>
+      <label>유지 시간: <b id="holdV"></b>초 <small>(예비동작은 자동으로 짧게)</small>
+        <input type="range" id="hold" min="0.3" max="2" step="0.1" value="0.6"></label>
       <label><input type="checkbox" id="useDir" checked> 방향 전환 판정 <small>— 정면/왼쪽/오른쪽 구분</small></label>
       <label style="display:none"><input type="checkbox" id="useYaw"> 몸 방향(돌기)도 판정 <small>— 정면 카메라라 부정확할 수 있음</small></label>
       <label><input type="checkbox" id="mirror" checked> 거울처럼 좌우 반전 표시</label>
@@ -210,9 +221,11 @@ const BASIC_DEF = [
   { name:'등주먹 치기',    cues:['등주먹','치기'] },
 ];
 const BASIC_MOVES = BASIC_DEF.map(d=>d.name);
+let basicRange=[0, 9];
+try{ const r=JSON.parse(localStorage.getItem('basic_range')||'null'); if(Array.isArray(r)) basicRange=r; }catch(e){}
 function buildBasicSteps(){
   const st=[{ name:'준비', key:'준비|act', mirror:false, cue:'준비' }];
-  BASIC_DEF.forEach(d=>{
+  BASIC_DEF.slice(basicRange[0], basicRange[1]+1).forEach(d=>{
     const m=d.name;
     ['①','②'].forEach((side,si)=>{
       if(d.phases){
@@ -268,6 +281,16 @@ let cur = 0;
 let passed = new Set();
 let holdStart = null;
 let bucket = 0, bucketStep = -1, lastJudgeT = 0;
+let stepStartT = 0, stepStartStep = -1, sessionStart = 0, skipped = [], stepLog = [];
+function finishReport(now){
+  const total = Math.round((now-sessionStart)/1000);
+  const slow = stepLog.filter(x=>!x.skip).sort((a,b)=>b.ms-a.ms).slice(0,3).map(x=>x.name+' '+(x.ms/1000).toFixed(1)+'초');
+  let t = '🎉 완료! '+total+'초';
+  if(mistakes.length) t += ' · 손바뀜 '+mistakes.length+'번';
+  if(skipped.length) t += ' · 넘어간 동작 '+skipped.length+'개';
+  updateTitle(t);
+  $('feedback').textContent = (skipped.length ? '넘어감: '+skipped.join(', ')+' / ' : '') + '오래 걸린 동작: '+slow.join(', ');
+}
 let wrongStart = null;
 let mistakes = [];          // { step: 단계 이름, did: 대신 한 동작 }
 const mistakeLogged = new Set();
@@ -383,6 +406,7 @@ function setMode(m){
   $('modeRecord').classList.toggle('on', m==='record');
   $('recordCard').style.display = m==='record' ? '' : 'none';
   ['addStepBtn','renameBtn','delStepBtn'].forEach(id=>$(id).style.display = isBasic() ? 'none' : '');
+  $('rangeBox').style.display = isBasic() ? '' : 'none';
   $('fCapture').style.display = m==='record' ? 'inline-block' : 'none';
   $('fVoice').style.display = (m==='record' && isBasic()) ? 'inline-block' : 'none';
   $('fReset').style.display = m==='record' ? 'none' : '';
@@ -584,7 +608,19 @@ function handle(res, now){
   const R = refOf(step);
   if(!R){ $('feedback').textContent='이 동작은 정답이 없습니다 (정답 녹화 모드에서 저장)'; setBar(0,'#e33'); return; }
 
-  const tol=+$('tol').value, holdSec=+$('hold').value, useYaw=$('useYaw').checked;
+  const isPrepStep = isBasic() && /예비/.test(step.name);   // 예비동작은 지나가는 자세 → 느슨하고 짧게
+  const tol = +$('tol').value * (isPrepStep ? 1.3 : 1);
+  const holdSec = isPrepStep ? Math.min(0.3, +$('hold').value) : +$('hold').value;
+  const useYaw=$('useYaw').checked;
+  if(stepStartStep!==cur){ stepStartStep=cur; stepStartT=now; if(cur===0 || !sessionStart) sessionStart=now; }
+  const skipSec=+$('skip').value;
+  if(skipSec>0 && now-stepStartT > skipSec*1000 && !passed.has(cur)){
+    skipped.push(step.name); stepLog.push({ name:step.name, ms:now-stepStartT, skip:true });
+    passAt=now; bucket=0;
+    if(cur < data.steps.length-1){ cur++; renderSteps(); updateTitle('⏭ 다음으로 넘어가요'); }
+    else { renderSteps(); finishReport(now); }
+    return;
+  }
   const c = compare(f, R);
 
   // 다른 동작이 더 비슷하면 통과 안 시킴
@@ -631,12 +667,10 @@ function handle(res, now){
     $('feedback').textContent='좋아요! 그대로 유지';
     if(p>=1){
       passed.add(cur); holdStart=null;
-      passAt=now;
+      passAt=now; stepLog.push({ name:step.name, ms:now-stepStartT });
       if(cur < data.steps.length-1){ cur++; renderSteps(); updateTitle('👍 통과! 다음 동작'); }
       else {
-        renderSteps();
-        if(!mistakes.length) updateTitle('🎉 끝까지 완료! 실수 없이 성공!');
-        else updateTitle('🎉 완료! 실수 '+mistakes.length+'번: '+mistakes.map(m=>m.step.split('.')[0]+'번('+m.did+'로 착각)').join(', '));
+        renderSteps(); finishReport(now);
       }
     }
   }else{
@@ -780,7 +814,7 @@ $('modeRecord').onclick=()=>setMode('record');
 const skipStep = i => mode==='record' && isBasic() && data.steps[i] && data.steps[i].mirror;
 $('prevBtn').onclick=()=>{ let i=cur-1; while(i>0 && skipStep(i)) i--; if(i>=0){cur=i; holdStart=null; renderSteps(); updateTitle('');} };
 $('nextBtn').onclick=()=>{ let i=cur+1; while(i<data.steps.length-1 && skipStep(i)) i++; if(i<=data.steps.length-1 && !skipStep(i)){cur=i; holdStart=null; renderSteps(); updateTitle('');} };
-$('resetBtn').onclick=()=>{ cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear(); renderSteps(); updateTitle(''); };
+$('resetBtn').onclick=()=>{ cur=0; passed.clear(); holdStart=null; wrongStart=null; mistakes=[]; mistakeLogged.clear(); skipped=[]; stepLog=[]; sessionStart=0; stepStartStep=-1; renderSteps(); updateTitle(''); };
 $('captureBtn').onclick=capture;
 $('clearBtn').onclick=()=>{ const st=data.steps[cur]; if(st.key!==undefined) delete data.refs[st.key]; else st.ref=null; save(); renderSteps(); };
 $('addStepBtn').onclick=()=>{ const n=prompt('동작 이름 (예: 5. 왼 앞굽이 아래막기)'); if(n){ data.steps.splice(cur+1,0,{name:n,ref:null}); cur++; save(); renderSteps(); updateTitle(''); } };
@@ -817,7 +851,26 @@ $('importFile').onchange=async e=>{
        data=d; cur=0; passed.clear(); save(); renderSteps(); updateTitle('불러오기 완료'); }
   catch(err){ alert('파일 형식이 맞지 않습니다'); }
 };
-const syncLabels=()=>{ $('tolV').textContent=$('tol').value; $('holdV').textContent=$('hold').value; };
+// 연습 범위
+(function(){
+  const f=$('rangeFrom'), t=$('rangeTo');
+  BASIC_DEF.forEach((d,i)=>{ f.add(new Option((i+1)+'. '+d.name, i)); t.add(new Option((i+1)+'. '+d.name, i)); });
+  f.value=basicRange[0]; t.value=basicRange[1];
+  const apply=()=>{
+    let a=+f.value, b=+t.value; if(b<a){ b=a; t.value=b; }
+    basicRange=[a,b]; try{ localStorage.setItem('basic_range', JSON.stringify(basicRange)); }catch(e){}
+    if(isBasic()){ data.steps=buildBasicSteps(); cur=0; passed.clear(); mistakes=[]; mistakeLogged.clear(); skipped=[]; stepLog=[]; sessionStart=0; stepStartStep=-1; renderSteps(); updateTitle(''); }
+  };
+  f.onchange=apply; t.onchange=apply;
+})();
+$('flipAllBtn').onclick=()=>{
+  if(!isBasic()) return;
+  if(!confirm('녹화된 정답 전체를 좌우로 뒤집을까요? (①이 반대 손이 됩니다)')) return;
+  Object.keys(data.refs).forEach(k=>{ if(validRef(data.refs[k])) data.refs[k]=mirrorRef(data.refs[k]); });
+  save(); renderSteps(); updateTitle('↔ 좌우를 뒤집었습니다. ①이 이제 반대 손입니다');
+};
+const syncLabels=()=>{ $('tolV').textContent=$('tol').value; $('holdV').textContent=$('hold').value; $('skipV').textContent=$('skip').value; };
+$('skip').oninput=()=>syncLabels();
 $('tol').oninput=()=>{ $('level').value=''; syncLabels(); };
 $('level').onchange=()=>{ if($('level').value){ $('tol').value=$('level').value; syncLabels(); } try{ localStorage.setItem('level',$('level').value); }catch(e){} };
 try{ const lv=localStorage.getItem('level'); if(lv){ $('level').value=lv; $('tol').value=lv; } }catch(e){} $('hold').oninput=syncLabels; syncLabels();
