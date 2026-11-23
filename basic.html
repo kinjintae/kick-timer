@@ -157,6 +157,7 @@
       <label><input type="checkbox" id="shadow" checked> 쉐도우(따라 할 자세) 보기</label>
       <label><input type="checkbox" id="sound" checked> 구령 소리 <small>— 녹음한 관장님 목소리, 없으면 기계 음성</small></label>
       <label><input type="checkbox" id="debug"> 판정 숫자 보기 (테스트용)</label>
+      <label><input type="checkbox" id="lowSpec"> <b>가벼운 모드</b> <small>— 오래된 폰(갤럭시 S10 등)이 버벅일 때. 켜고 [다시 시작]</small></label>
       <label>AI 모델 <small>(바꾸면 카메라 다시 켜기)</small>
         <select id="model" style="width:100%;padding:6px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444">
           <option value="full">정밀 (권장)</option>
@@ -291,7 +292,8 @@ function loadKind(k){
   if(k==='basic'){ data.moves = BASIC_MOVES.slice(); data.steps = buildBasicSteps(); }
   else { data.kind='poomsae'; data.steps = buildPoomsaeSteps(); }
 }
-function save(){ try { localStorage.setItem(KINDS[kind].key, JSON.stringify({ title:data.title, kind, moves:data.moves, refs:data.refs, voice:data.voice||{} })); } catch(e) {} }
+let saveCount=0;
+function save(){ saveCount++; try { localStorage.setItem(KINDS[kind].key, JSON.stringify({ title:data.title, kind, moves:data.moves, refs:data.refs, voice:data.voice||{} })); } catch(e) {} }
 const isBasic = () => kind==='basic';
 const MIN_PARTS = () => 2;   // 판정에 필요한 최소 부위 수
 function validRef(r){ return r && Array.isArray(r.vecs) && r.vecs.length===SEGS.length; }
@@ -462,14 +464,14 @@ function setMode(m){
 async function openCamera(){
   if(video && video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); }
   if(!video){ video=document.createElement('video'); video.playsInline=true; video.muted=true; video.setAttribute('playsinline',''); }
-  video.srcObject = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:facing, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:facing, width:{ideal: lowSpec()?640:1280}, height:{ideal: lowSpec()?480:720} }, audio:false });
   await video.play();
   cv.width=video.videoWidth; cv.height=video.videoHeight;
   smooth=null;
 }
 async function loadModel(){
   const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-  const url = MODEL_URL[$('model').value] || MODEL_URL.full;
+  const url = lowSpec() ? MODEL_URL.lite : (MODEL_URL[$('model').value] || MODEL_URL.full);
   const opts = d=>({ baseOptions:{ modelAssetPath:url, delegate:d }, runningMode:'VIDEO', numPoses:1,
                      minPoseDetectionConfidence:0.6, minPosePresenceConfidence:0.6, minTrackingConfidence:0.6 });
   if(landmarker){ try{ landmarker.close(); }catch(e){} }
@@ -639,9 +641,13 @@ async function recordVoice(){
     setTimeout(()=>{ try{ rec.stop(); }catch(e){} }, 1600); }, 700);
 }
 
+const lowSpec = () => $('lowSpec').checked;
+let fpsCount=0, fpsT0=0, fps=0, slowWarned=false;
 function loop(){
   const now=performance.now();
-  if(landmarker && video && video.readyState>=2 && now>lastTs){
+  if(landmarker && video && video.readyState>=2 && now>lastTs && (!lowSpec() || now-lastTs>=60)){   // 가벼운 모드: 초당 약 15번만 계산
+    fpsCount++; if(now-fpsT0>=2000){ fps=fpsCount*1000/(now-fpsT0); fpsCount=0; fpsT0=now;
+      if(fps<10 && !lowSpec() && !slowWarned){ slowWarned=true; $('feedback').textContent='🐢 이 폰은 느려요 ('+fps.toFixed(0)+'fps). ⚙ 메뉴 → "가벼운 모드"를 켜세요'; } }
     lastTs=now;
     let res=null;
     try{ res = landmarker.detectForVideo(video, now); }catch(e){}
@@ -672,7 +678,7 @@ function handle(res, now){
   const f = features(smoothWorld(world), lm);
   const dir = estimateDirection(lm);
   f.dir = dir.code; f.dcue = [dir.nose, dir.face, dir.sh, dir.ears[0], dir.ears[1]];
-  const dirLine = '▶ 지금 방향: '+dir.label+'  (코 '+(dir.nose>=0?'+':'')+dir.nose.toFixed(2)+')';
+  const dirLine = '▶ 지금 방향: '+dir.label+'  (코 '+(dir.nose>=0?'+':'')+dir.nose.toFixed(2)+')  속도 '+fps.toFixed(0)+'fps';
 
   // ----- 연속 녹화: 자세가 바뀌고 1초 멈추면 자동 저장 -----
   if(autoRec && !capturing && mode==='record') autoWatch(f, now);
@@ -751,14 +757,16 @@ function handle(res, now){
 
   // 다른 동작이 더 비슷하면 통과 안 시킴
   let other=null, otherScore=Infinity, otherC=null;
+  const stepBase = step.name.replace(/^[0-9]+\.\s*/,'');
   data.steps.forEach((o,i)=>{
+    if(i===cur) return;
+    if(isBasic() && !(o.key===step.key && o.mirror!==step.mirror)) return;   // 기본동작: 좌우 반대 손(손바뀜)만 비교 (가벼운 검사 먼저)
+    // 같은 기술이 반복되는 동작(이름에서 번호 뺀 부분이 같음)은 '틀림'으로 보지 않음
+    if(o.name.replace(/^[0-9]+\.\s*/,'')===stepBase) return;
     const oR = refOf(o);
-    if(i===cur || !oR) return;
+    if(!oR) return;
     if(!isBasic() && oR.dir && oR.dir!==f.dir) return;   // 다른 방향 동작과는 비교 안 함
     const oc=compare(f,oR);
-    // 같은 기술이 반복되는 동작(이름에서 번호 뺀 부분이 같음)은 '틀림'으로 보지 않음
-    if(o.name.replace(/^[0-9]+\.\s*/,'')===step.name.replace(/^[0-9]+\.\s*/,'')) return;
-    if(isBasic() && !(o.key===step.key && o.mirror!==step.mirror)) return;   // 기본동작: 좌우 반대 손(손바뀜)만 비교
     if(isBasic() && compare(R,oR).mean < 15) return;                          // 좌우 대칭 자세(준비 등)는 손바뀜 판정 안 함
     if(oc.n < MIN_PARTS()) return;
     if(oc.mean<otherScore){ otherScore=oc.mean; other=o; otherC=oc; }
@@ -771,10 +779,10 @@ function handle(res, now){
       if(oc.n>=MIN_PARTS() && oc.mean < otherScore){ otherScore=oc.mean; other={ name:'반대 손', twin:true }; otherC=oc; }
     }
   }
-  const isClosest = !other || c.mean <= otherScore;
+  const isClosest = isPrepStep || !other || c.mean <= otherScore;   // 예비동작은 '반대 손이 더 가깝다'로 막지 않음
 
   lastArmRatio = f.armRatio; updateKidLen(f);
-  const okLimbs = c.n >= MIN_PARTS() && c.worstDiff <= tol && c.mean <= tol*0.65;   // 가장 틀린 부위 + 평균 둘 다
+  const okLimbs = c.n >= MIN_PARTS() && c.worstDiff <= tol && c.mean <= tol*0.75;   // 가장 틀린 부위 + 평균 둘 다
   const pc = posCheck(f, R);
   const posTol = tol/100;                                                              // 35° ↔ 팔 길이의 35%
   const okPos = pc.worst <= posTol;
@@ -798,7 +806,7 @@ function handle(res, now){
   // 유지 판정: 한두 프레임 흔들려도 바로 0으로 돌아가지 않게 '양동이'에 시간을 채움
   const dt = Math.min(100, now - (lastJudgeT||now)); lastJudgeT = now;
   if(bucketStep!==cur){ bucket=0; bucketStep=cur; }
-  bucket = shadowOk ? bucket+dt : Math.max(0, bucket - dt*1.5);
+  bucket = shadowOk ? bucket+dt : Math.max(0, bucket - dt*0.4);   // 실측: 1.5배로 깎으면 흔들리는 지르기가 영원히 안 참
   if(okDir && okLimbs && okYaw && isClosest && okPos){
     wrongStart=null;
     const p=bucket/(holdSec*1000);
@@ -815,7 +823,7 @@ function handle(res, now){
   }else{
     holdStart=null;
     // 다른 동작을 또렷하게 하고 있으면 = 순서 착각(손바뀜·동작바뀜)
-    const doingOther = okDir && other && !isClosest && otherC.n>=MIN_PARTS() && otherC.worstDiff<=tol;
+    const doingOther = !isPrepStep && okDir && other && !isClosest && otherC.n>=MIN_PARTS() && otherC.worstDiff<=tol;   // 예비동작은 손바뀜 판정 안 함
     if(doingOther){
       if(wrongStart===null) wrongStart=now;
       if(now-wrongStart >= holdSec*1500){
@@ -883,7 +891,13 @@ function updateKidLen(f){
   if(!kidLen) kidLen={ up:c.up, fore:c.fore };
   else { kidLen.up=Math.max(kidLen.up*0.997, c.up); kidLen.fore=Math.max(kidLen.fore*0.997, c.fore); }   // 팔을 뻗었을 때 길이를 기억
 }
+let refLenCache=null, refLenKey='';
 function refLen(){
+  const key=kind+':'+Object.keys(data.refs||{}).length+':'+saveCount;
+  if(key===refLenKey) return refLenCache;
+  refLenKey=key; refLenCache=refLenRaw(); return refLenCache;
+}
+function refLenRaw(){
   let up=0, fore=0;
   const refs = Object.values(data.refs||{});
   refs.forEach(r=>{ if(r && r.pts && r.pts[15]){ const l=segLens(r.pts); up=Math.max(up,l.up); fore=Math.max(fore,l.fore); } });
@@ -1027,6 +1041,8 @@ $('fPrev').onclick=()=>$('prevBtn').click();
 $('fNext').onclick=()=>$('nextBtn').click();
 $('fReset').onclick=()=>$('resetBtn').click();
 $('fStart').onclick=practiceStartPause;
+try{ $('lowSpec').checked = localStorage.getItem('lowSpec')==='1'; }catch(e){}
+$('lowSpec').onchange=()=>{ try{ localStorage.setItem('lowSpec', $('lowSpec').checked?'1':'0'); }catch(e){} $('feedback').textContent='위쪽 [다시 시작]을 눌러야 적용됩니다'; };
 $('logExportBtn').onclick=async()=>{
   const logs=loadLogs(); if(!logs.length){ alert('저장된 기록이 없습니다'); return; }
   const name='practice-log-'+($('deviceLabel').value||'phone')+'-'+new Date().toISOString().slice(0,10)+'.json';
