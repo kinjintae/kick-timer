@@ -787,10 +787,25 @@ $('addStepBtn').onclick=()=>{ const n=prompt('동작 이름 (예: 5. 왼 앞굽�
 $('renameBtn').onclick=()=>{ const s=data.steps[cur]; const n=prompt('새 이름', s.name); if(n){ s.name=n; save(); renderSteps(); updateTitle(); } };
 $('delStepBtn').onclick=()=>{ if(data.steps.length<=1) return; if(confirm('"'+data.steps[cur].name+'" 삭제할까요?')){ data.steps.splice(cur,1); cur=Math.min(cur,data.steps.length-1); save(); renderSteps(); updateTitle(''); } };
 $('fullBtn').onclick=()=>{ const el=$('stage'); (document.fullscreenElement? document.exitFullscreen() : el.requestFullscreen?.()); };
-$('exportBtn').onclick=()=>{
+$('exportBtn').onclick=async()=>{
   const out = isBasic() ? { title:data.title, kind:'basic', moves:data.moves, refs:data.refs, voice:data.voice||{} } : data;
-  const blob=new Blob([JSON.stringify(out)],{type:'application/json'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download= isBasic() ? 'basic-data.json' : 'poomsae-data.json'; a.click();
+  const name = isBasic() ? 'basic-data.json' : 'poomsae-data.json';
+  const text = JSON.stringify(out);
+  // 1순위: 공유하기 창 (카톡 '나와의 채팅'으로 바로 보내기) — 폰에서 가장 확실
+  try{
+    const file = new File([text], name, { type:'application/json' });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      await navigator.share({ files:[file], title:name });
+      $('feedback').textContent='✅ 공유 완료: '+name; return;
+    }
+  }catch(e){ if(e && e.name==='AbortError') return; }
+  // 2순위: 다운로드
+  const blob=new Blob([text],{type:'application/octet-stream'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=name; a.style.display='none';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 4000);
+  $('feedback').textContent='⬇ '+name+' 다운로드를 시도했습니다. 안 보이면 카톡 안 브라우저가 아닌 크롬으로 열어서 다시 해주세요';
 };
 $('importBtn').onclick=()=>$('importFile').click();
 $('importFile').onchange=async e=>{
