@@ -65,6 +65,10 @@
 </style>
 </head>
 <body>
+<div id="kakaoBar" style="display:none;background:#fee500;color:#111;padding:8px 10px;font-size:14px;align-items:center;gap:8px">
+  <span style="flex:1">카카오톡 안에서는 정답·기록이 따로 저장되고 파일 내보내기가 안 됩니다.</span>
+  <button id="kakaoOpen" style="background:#111;color:#fee500;border:none;font-weight:700">다른 브라우저로 열기</button>
+</div>
 <header>
   <h1>품새 연습기</h1>
   <button id="modePractice" class="on">연습 모드</button>
@@ -185,6 +189,7 @@
         <input id="deviceLabel" placeholder="예: 폰A" style="width:100%;padding:8px;border-radius:6px;background:#2a2a2a;color:#eee;border:1px solid #444"></label>
       <div class="row" style="margin-top:6px">
         <button id="logExportBtn">📊 기록 내보내기</button>
+        <button id="logCopyBtn">📋 복사</button>
         <button id="logClearBtn">기록 지우기</button>
       </div>
       <small id="logCount"></small>
@@ -524,6 +529,30 @@ function playCue(st){
 }
 // ---------- 연습 시작 / 일시정지 / 정지 ----------
 let practiceState='idle', countdownEnd=0, pauseAt=0;
+// ---------- 내보내기: 공유하기 → (카톡 안이면) 복사 → 다운로드 ----------
+const IN_KAKAO = /KAKAOTALK/i.test(navigator.userAgent);
+async function copyText(text){
+  try{ await navigator.clipboard.writeText(text); return true; }catch(e){}
+  try{ const ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+       document.body.appendChild(ta); ta.select(); const ok=document.execCommand('copy'); ta.remove(); return ok; }catch(e){ return false; }
+}
+async function exportText(name, text){
+  try{
+    const file = new File([text], name, { type:'application/json' });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){ await navigator.share({ files:[file], title:name }); $('feedback').textContent='✅ 공유 완료: '+name; return; }
+  }catch(e){ if(e && e.name==='AbortError') return; }
+  if(IN_KAKAO){
+    const ok = await copyText(text);
+    alert(ok ? '📋 내용이 복사됐습니다.\n카톡 채팅창(또는 Claude 대화창)에 붙여넣기 해서 보내주세요.\n\n파일로 받으려면 오른쪽 위 메뉴에서 "다른 브라우저로 열기"를 쓰세요.'
+             : '카카오톡 안에서는 저장이 안 됩니다. 위쪽 [다른 브라우저로 열기]를 눌러 주세요.');
+    return;
+  }
+  const url=URL.createObjectURL(new Blob([text],{type:'application/octet-stream'}));
+  const a=document.createElement('a'); a.href=url; a.download=name; a.style.display='none';
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 4000);
+  $('feedback').textContent='⬇ '+name+' 다운로드를 시도했습니다. 안 보이면 [📋 복사]를 쓰세요';
+}
+
 // ---------- 연습 기록: 단계별로 왜 실패했는지 모아 둠 ----------
 let stepStats={};
 const LOG_KEY='practice_logs_v1';
@@ -1041,16 +1070,15 @@ $('fPrev').onclick=()=>$('prevBtn').click();
 $('fNext').onclick=()=>$('nextBtn').click();
 $('fReset').onclick=()=>$('resetBtn').click();
 $('fStart').onclick=practiceStartPause;
+if(IN_KAKAO){ $('kakaoBar').style.display='flex'; }
+$('kakaoOpen').onclick=()=>{ location.href='kakaotalk://web/openExternal?url='+encodeURIComponent(location.href); };
 try{ $('lowSpec').checked = localStorage.getItem('lowSpec')==='1'; }catch(e){}
 $('lowSpec').onchange=()=>{ try{ localStorage.setItem('lowSpec', $('lowSpec').checked?'1':'0'); }catch(e){} $('feedback').textContent='위쪽 [다시 시작]을 눌러야 적용됩니다'; };
 $('logExportBtn').onclick=async()=>{
   const logs=loadLogs(); if(!logs.length){ alert('저장된 기록이 없습니다'); return; }
-  const name='practice-log-'+($('deviceLabel').value||'phone')+'-'+new Date().toISOString().slice(0,10)+'.json';
-  const text=JSON.stringify(logs);
-  try{ const file=new File([text], name, { type:'application/json' });
-       if(navigator.canShare && navigator.canShare({ files:[file] })){ await navigator.share({ files:[file], title:name }); return; } }catch(e){ if(e && e.name==='AbortError') return; }
-  const url=URL.createObjectURL(new Blob([text],{type:'application/octet-stream'})); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },4000);
+  await exportText('practice-log-'+($('deviceLabel').value||'phone')+'-'+new Date().toISOString().slice(0,10)+'.json', JSON.stringify(logs));
 };
+$('logCopyBtn').onclick=async()=>{ const logs=loadLogs(); if(!logs.length){ alert('저장된 기록이 없습니다'); return; } alert((await copyText(JSON.stringify(logs))) ? '📋 기록이 복사됐습니다. 카톡이나 Claude 대화창에 붙여넣기 하세요' : '복사에 실패했습니다'); };
 $('logClearBtn').onclick=()=>{ if(confirm('저장된 연습 기록을 모두 지울까요? (먼저 내보내기 하셨나요?)')){ try{ localStorage.removeItem(LOG_KEY); }catch(e){} showLogCount(); } };
 ['kidLabel','deviceLabel'].forEach(id=>{ try{ $(id).value=localStorage.getItem(id)||''; }catch(e){} $(id).oninput=()=>{ try{ localStorage.setItem(id,$(id).value); }catch(e){} }; });
 showLogCount();
@@ -1075,23 +1103,7 @@ $('delStepBtn').onclick=()=>{ if(data.steps.length<=1) return; if(confirm('"'+da
 $('fullBtn').onclick=()=>{ const el=$('stage'); (document.fullscreenElement? document.exitFullscreen() : el.requestFullscreen?.()); };
 $('exportBtn').onclick=async()=>{
   const out = { title:data.title, kind, moves:data.moves, refs:data.refs, voice:data.voice||{} };
-  const name = isBasic() ? 'basic-data.json' : 'poomsae-data.json';
-  const text = JSON.stringify(out);
-  // 1순위: 공유하기 창 (카톡 '나와의 채팅'으로 바로 보내기) — 폰에서 가장 확실
-  try{
-    const file = new File([text], name, { type:'application/json' });
-    if(navigator.canShare && navigator.canShare({ files:[file] })){
-      await navigator.share({ files:[file], title:name });
-      $('feedback').textContent='✅ 공유 완료: '+name; return;
-    }
-  }catch(e){ if(e && e.name==='AbortError') return; }
-  // 2순위: 다운로드
-  const blob=new Blob([text],{type:'application/octet-stream'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url; a.download=name; a.style.display='none';
-  document.body.appendChild(a); a.click();
-  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 4000);
-  $('feedback').textContent='⬇ '+name+' 다운로드를 시도했습니다. 안 보이면 카톡 안 브라우저가 아닌 크롬으로 열어서 다시 해주세요';
+  await exportText(isBasic() ? 'basic-data.json' : 'poomsae-data.json', JSON.stringify(out));
 };
 $('importBtn').onclick=()=>$('importFile').click();
 $('importFile').onchange=async e=>{
